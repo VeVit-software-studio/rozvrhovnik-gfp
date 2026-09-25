@@ -320,7 +320,6 @@ Aplikace v repozitáři je nová, ucelená implementace funkcí v0.2–v0.4 (inv
 
 | menu | třídy | volby | h/týden | 2h | voleb/žák |
 |---|---|---|---|---|---|
-| sek-volba | sekunda | INF / ČJL | 2 | ne | 1 |
 | 3j-3…3j-8 | ročník 3–8 (8leté) | NJ2/ŠJ2/FJ2 | 3 | ne | 1 |
 | 2j-1A…2j-4A | 1A … 4A (4leté) | NJ2/ŠJ2/FJ2 | 4 | ne | 1 |
 | vol-5 | kvintaA/B, 1A | VV2 (kap. 28) / DV2 | 2 | ano | 1 |

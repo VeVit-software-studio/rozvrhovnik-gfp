@@ -78,6 +78,7 @@ struct Pruvodce {
     novi: BTreeMap<String, Vec<NovyZak>>,
     zmeny: BTreeMap<u32, Zmena>,
     filtr: String,
+    hledat: String,
     novy: Option<SkolniRok>,
     menu_sel: usize,
     rozdelit: Rozdelit,
@@ -1789,6 +1790,7 @@ impl Pruvodce {
             novi: vstupni.iter().map(|t| (t.clone(), Vec::new())).collect(),
             zmeny: p.rok.studenti.iter().map(|s| (s.id, rok::vychozi_zmena(s))).collect(),
             filtr: String::new(),
+            hledat: String::new(),
             novy: None,
             menu_sel: 0,
             rozdelit: None,
@@ -1906,6 +1908,7 @@ impl Pruvodce {
                     ui.selectable_value(&mut self.filtr, t.id.clone(), &t.nazev);
                 }
             });
+            ui.add(egui::TextEdit::singleline(&mut self.hledat).hint_text("hledat jméno").desired_width(180.0));
             let prop = self.zmeny.values().filter(|z| **z == Zmena::Propada).count();
             let odch = self.zmeny.values().filter(|z| **z == Zmena::Odchazi).count();
             ui.label(format!("propadá {} · odchází {}", prop, odch));
@@ -1915,7 +1918,14 @@ impl Pruvodce {
                 ui.label(RichText::new(h).strong());
             }
             ui.end_row();
-            for s in p.rok.studenti.iter().filter(|s| self.filtr.is_empty() || s.trida == self.filtr) {
+            let hledat = self.hledat.to_lowercase();
+            for s in p
+                .rok
+                .studenti
+                .iter()
+                .filter(|s| self.filtr.is_empty() || s.trida == self.filtr)
+                .filter(|s| s.jmeno.to_lowercase().contains(&hledat))
+            {
                 let zmena = self.zmeny.entry(s.id).or_insert(Zmena::Postupuje);
                 let odesel = s.status == StavStudenta::Odesel;
                 let cil = if odesel { None } else { rok::cilova_trida(&p.skola, s, *zmena) };

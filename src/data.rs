@@ -839,21 +839,6 @@ pub fn vychozi_skola_a_menu() -> (Skola, Vec<Menu>) {
     menu.push(sem_menu("sem-8", "Semináře oktáva (6 × 2 h)", &["oktavaA", "oktavaB", "4A"], &SEMINARE_8, 6, &mut pr));
 
     // Volitelné předměty (zadání a–f)
-    menu.insert(
-        0,
-        Menu {
-            id: "sek-volba".into(),
-            nazev: "Sekunda: informatika / čeština".into(),
-            tridy: vec!["sekunda".into()],
-            volby: vec![
-                volba("INF+", "Informatika", "INF", pr.vyber("INF", 2.0, &[])),
-                volba("ČJL+", "Čeština", "ČJL", pr.vyber("ČJL", 2.0, &[])),
-            ],
-            hodin_tydne: 2,
-            dvojhodina: false,
-            pocet_voleb: 1,
-        },
-    );
     let jazyky = |pr: &mut Prirazovac, h: f32| {
         vec![
             volba("NJ2", "Němčina", "NJ2", pr.vyber("NJ2", h, &[])),
