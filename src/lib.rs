@@ -16,6 +16,7 @@
 
 pub mod data;
 pub mod export;
+pub mod profily;
 pub mod rok;
 pub mod solver;
 pub mod validation;

@@ -20,6 +20,9 @@ use std::time::Instant;
 pub const NENI: u8 = u8::MAX;
 /// Váha jednoho tvrdého porušení vůči měkkým penalizacím (měkké jsou váženy počtem žáků).
 const H: i64 = 50_000;
+/// Měřítko měkkých penalizací učitele (okna, preferované třídy) vůči penalizacím žáků,
+/// které se násobí počtem žáků profilu.
+const MERITKO_UCITELE: i64 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Tyden {
@@ -496,6 +499,8 @@ struct Model {
     conf: Vec<Vec<u64>>,
     uprof: Vec<Vec<u32>>,
     uteach: Vec<Vec<u32>>,
+    /// Podmnožina `uteach`: učitelé jednotky, pro které je některá třída jednotky preferovaná.
+    uteach_pref: Vec<Vec<u32>>,
     ukeys: Vec<Vec<u32>>,
     upools: Vec<Vec<(u32, u8)>>,
     uplace: Vec<[i64; N_SLOTU]>,
@@ -626,6 +631,7 @@ impl Model {
         let mut uc_idx: HashMap<&str, usize> = HashMap::new();
         let mut teach_max: Vec<u8> = Vec::new();
         let mut uteach: Vec<Vec<u32>> = vec![vec![]; n_u];
+        let mut uteach_pref: Vec<Vec<u32>> = vec![vec![]; n_u];
         for (u, j) in vs.jednotky.iter().enumerate() {
             for &i in j {
                 let id = lekce[i].ucitel.as_str();
@@ -635,6 +641,12 @@ impl Model {
                 });
                 if !uteach[u].contains(&(t as u32)) {
                     uteach[u].push(t as u32);
+                }
+                let preferuje = skola
+                    .ucitel(id)
+                    .is_some_and(|uc| lekce[i].tridy.iter().any(|tr| uc.preferovane_tridy.contains(tr)));
+                if preferuje && !uteach_pref[u].contains(&(t as u32)) {
+                    uteach_pref[u].push(t as u32);
                 }
             }
         }
@@ -786,6 +798,7 @@ impl Model {
             conf,
             uprof,
             uteach,
+            uteach_pref,
             ukeys,
             upools,
             uplace,
@@ -826,6 +839,8 @@ struct Stav<'m> {
     slot_units: Vec<Vec<u32>>,
     prof_occ: Vec<[u8; N_SLOTU]>,
     teach_occ: Vec<[u8; N_SLOTU]>,
+    /// Obsazenost učitele hodinami jeho preferovaných tříd.
+    teach_pref_occ: Vec<[u8; N_SLOTU]>,
     key_occ: Vec<[u8; N_SLOTU]>,
     pool_occ: Vec<[[u8; N_SLOTU]; 2]>,
     prof_day: Vec<[DenC; DNY]>,
@@ -871,6 +886,7 @@ impl<'m> Stav<'m> {
             slot_units: vec![Vec::new(); N_SLOTU],
             prof_occ: vec![[0; N_SLOTU]; m.prof.len()],
             teach_occ: vec![[0; N_SLOTU]; m.teach_max.len()],
+            teach_pref_occ: vec![[0; N_SLOTU]; m.teach_max.len()],
             key_occ: vec![[0; N_SLOTU]; m.key_len.len()],
             pool_occ: vec![[[0; N_SLOTU]; 2]; m.pool_cap.len()],
             prof_day: vec![[DenC::default(); DNY]; m.prof.len()],
@@ -926,10 +942,18 @@ impl<'m> Stav<'m> {
     }
 
     fn ucitel_den(&self, t: usize, d: usize) -> (i64, i64) {
+        let m = self.m;
         let occ = &self.teach_occ[t][d * SLOTU..(d + 1) * SLOTU];
         let (n, okna, _, _) = beh_a_okna(occ);
-        let hard = n.saturating_sub(self.m.teach_max[t] as usize) as i64;
-        (hard, self.m.vahy.ucitel_okno as i64 * okna as i64 * 5)
+        let hard = n.saturating_sub(m.teach_max[t] as usize) as i64;
+        // preferované třídy učitele: penalizace za jejich brzkou (7:20) a odpolední hodinu
+        let pref = &self.teach_pref_occ[t][d * SLOTU..(d + 1) * SLOTU];
+        let pref_rane = (pref[0] > 0) as i64;
+        let pref_odpo = pref[m.odpo_od..].iter().filter(|&&o| o > 0).count() as i64;
+        let soft = (m.vahy.ucitel_okno as i64 * okna as i64
+            + m.vahy.ucitel_preference as i64 * (pref_rane + pref_odpo))
+            * MERITKO_UCITELE;
+        (hard, soft)
     }
 
     fn klic_den(&self, k: usize, d: usize) -> (i64, i64) {
@@ -957,6 +981,9 @@ impl<'m> Stav<'m> {
             }
             for &x in &m.uteach[u] {
                 self.teach_occ[x as usize][t] -= 1;
+            }
+            for &x in &m.uteach_pref[u] {
+                self.teach_pref_occ[x as usize][t] -= 1;
             }
             for &k in &m.ukeys[u] {
                 self.key_occ[k as usize][t] -= 1;
@@ -990,6 +1017,9 @@ impl<'m> Stav<'m> {
             }
             for &x in &m.uteach[u] {
                 self.teach_occ[x as usize][t] += 1;
+            }
+            for &x in &m.uteach_pref[u] {
+                self.teach_pref_occ[x as usize][t] += 1;
             }
             for &k in &m.ukeys[u] {
                 self.key_occ[k as usize][t] += 1;

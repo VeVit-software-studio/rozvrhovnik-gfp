@@ -115,6 +115,10 @@ pub struct Ucitel {
     pub max_den: u8,
     #[serde(default)]
     pub preferovana_mistnost: Option<String>,
+    /// Třídy, které učitel preferuje – solver jim dává přednostně
+    /// lepší (ne brzké/pozdní) hodiny na úkor ostatních tříd učitele.
+    #[serde(default)]
+    pub preferovane_tridy: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -191,6 +195,9 @@ pub struct Vahy {
     pub seminar_odpoledne: u32,
     pub rozlozeni: u32,
     pub ucitel_okno: u32,
+    /// Penalizace za brzkou/pozdní hodinu preferované třídy učitele.
+    #[serde(default)]
+    pub ucitel_preference: u32,
 }
 
 impl Default for Vahy {
@@ -203,6 +210,7 @@ impl Default for Vahy {
             seminar_odpoledne: 2,
             rozlozeni: 2,
             ucitel_okno: 1,
+            ucitel_preference: 3,
         }
     }
 }
@@ -797,6 +805,7 @@ pub fn vychozi_skola_a_menu() -> (Skola, Vec<Menu>) {
             volno: vec![],
             max_den: 7,
             preferovana_mistnost: None,
+            preferovane_tridy: vec![],
         })
         .collect();
     for (u, m) in PREFEROVANE {

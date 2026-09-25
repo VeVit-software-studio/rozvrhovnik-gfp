@@ -255,8 +255,8 @@ Aplikace v repozitáři je nová, ucelená implementace funkcí v0.2–v0.4 (inv
 
 ```
 ┌───────────────────────────── aplikace (eframe/egui) ─────────────────────┐
-│  hlavní panel: Rozvrh | Studenti | Volitelné | Plán | Číselníky |         │
-│                Nastavení | Report      + „✚ Vytvořit nový rok…“          │
+│  hlavní panel: Rozvrh | Studenti | Volitelné | Plán | Učitelé | Předměty │
+│                | Číselníky | Nastavení | Report + „✚ Vytvořit nový rok…“ │
 │  průvodce (Window): 0 rok → 1 noví žáci → 2 změny → 3 volitelné → 4 fin. │
 ├─────────────────────────────── data (JSON) ──────────────────────────────┤
 │  skola_data.json: { skola, rok, historie[], piny{}, rozvrh }  (autosave) │
@@ -286,7 +286,8 @@ Aplikace v repozitáři je nová, ucelená implementace funkcí v0.2–v0.4 (inv
 
 - `Trida { id, nazev, rocnik, typ, kmenova, naslednik, omezeni_prepsat }`
 - `Mistnost { id, nazev, kapacita, kmenova }`
-- `Ucitel { id, jmeno, volno[], max_den, preferovana_mistnost }` – `volno` = sloty (den*12+slot)
+- `Ucitel { id, jmeno, volno[], max_den, preferovana_mistnost, preferovane_tridy[] }` – `volno` = sloty
+  (den*12+slot); `preferovane_tridy` = školní třídy, kterým řešič přednostně dává lepší hodiny tohoto učitele
 - `Predmet { id, nazev, specialni_mistnosti[], kmenova_ok }`
 - `PlanovaHodina { trida, predmet, hodin, struktura, dvoj }`
   - `Struktura`:
@@ -375,8 +376,19 @@ semináře dají rozvrhnout bez překryvů (realistická struktura „seminárn�
 | semináře 2h odpoledne | 2 / h |
 | stejný předmět 2× za den (nesouvisle = víc) | 2 |
 | okno učitele | 1 |
+| hodina **preferované třídy učitele** v 7:20 / odpoledne | 3 |
 
-Penalizace žáků se násobí počtem žáků profilu; tvrdé porušení má váhu 50 000.
+Penalizace žáků se násobí počtem žáků profilu, penalizace učitele (okna, preferované třídy)
+měřítkem 5; tvrdé porušení má váhu 50 000.
+
+**Preferované třídy učitele** (návrh `docs/superpowers/specs/2026-09-25-profily-ucitelu-a-predmetu-design.md`):
+řešič nerozhoduje, kdo učí kterou třídu (to je dané plánem), jen *kdy*. U jednotek, jejichž
+třída je v `preferovane_tridy` jejich učitele, se hlídá zvláštní obsazenost učitele
+(`teach_pref_occ`) a v `ucitel_den` se za každou takovou hodinu v 7:20 nebo odpoledne připočte
+váha `ucitel_preference`. Brzké/pozdní hodiny učitele tak přednostně dostanou jeho
+nepreferované třídy. Učitelé bez preferencí nemají žádnou režii ani efekt.
+Ověřeno testem `tests/preference_ucitele.rs` (2 třídy, 1 učitel, 30 h): brzké/odpolední hodiny
+preferované třídy 0 (nepreferované 6), bez preference 2 / 4.
 
 ### 7.4 Algoritmus
 
@@ -415,7 +427,7 @@ nejdelší blok, průměrná okna).
 
 ### 8.1 Horní lišta
 
-`📅 Rozvrh | 👥 Studenti | ☑ Volitelné | 📚 Učební plán | 📇 Číselníky | ⚙ Nastavení | 📊 Report`
+`📅 Rozvrh | 👥 Studenti | ☑ Volitelné | 📚 Učební plán | 🎓 Učitelé | 📖 Předměty | 📇 Číselníky | ⚙ Nastavení | 📊 Report`
 + **„✚ Vytvořit nový rok…“** (zelené) + 💾 Uložit + 📁 Otevřít; druhý řádek: rok,
 **▶ Generovat** / průběh řešení (fáze, čas, iterace, skóre) + ⏹ Zastavit, stavová zpráva.
 
@@ -470,20 +482,47 @@ Per třída: předmět, hodin, 2h blok, rozdělení (celá třída / AJa-AJb /
 dívky-chlapci / **L↔S třída / L↔S skupiny** s editací párů předmět+učitel),
 + přidat/✖; součet hodin plánu + volitelných.
 
-### 8.7 Číselníky
+### 8.7 Učitelé (profily)
+
+Vlevo seznam učitelů s úvazkem (hledání podle zkratky/jména, semafor ≥26 / ≥31 h), vpravo
+profil vybraného učitele:
+- **úvazek** (h/týden, stejný výpočet jako v Reportu), max h/den, volno, preferovaná učebna,
+  hodiny ve vygenerovaném rozvrhu;
+- **📅 Zobrazit rozvrh** – přepne na Rozvrh v pohledu tohoto učitele;
+- **preferované třídy** (editovatelné, „Upravit…“) – ovlivňují generování (viz 7.3);
+- **vyučované předměty** a **vyučované třídy** (s hodinami; preferované modře);
+- tabulka **Co učí**: předmět × třída × skupina × h/týden (+ menu voleb a počet žáků).
+
+Zkratka, jméno, max h/den, volno a preferovaná učebna se dál upravují v Číselníkách.
+Vše kromě preferovaných tříd je odvozené z Učebního plánu a katalogů voleb.
+
+### 8.8 Předměty (profily)
+
+Vlevo seznam předmětů s hodinami týdně (🔒 = povinné učebny, šedě = neučí se), vpravo profil:
+- název (editovatelný), celkem hodin týdně;
+- **učebny**: „Smí do kmenové učebny“ + odborné učebny (s kapacitami) a srozumitelné vysvětlení:
+  **🔒 povinné** (odškrtnuto – např. INF jen v PIF, jinde se učit nesmí) nebo
+  **⭐ preferované** (zaškrtnuto – přednostně odborná učebna, jinak kmenová / jiná volná kmenová);
+  z rozvrhu kolik hodin skutečně je v odborné učebně;
+- **vyučující**: třída × skupina × učitel × h/týden (+ volby);
+- **třídy a skupiny**, kde se předmět učí.
+
+U střídavých hodin (L/S) se počítá skutečný předmět páru, ne popisek (např. „DV/VV“).
+
+### 8.9 Číselníky
 
 Třídy (název, ročník, typ, kmenová, následník, výchozí limity), Místnosti (kapacita,
 kmenová), Učitelé (jméno, max h/den, preferovaná učebna, **📅 volno – klikací mřížka
 5×12**), Předměty (smí do kmenové, odborné místnosti). Přidání přes „nové ID“.
 
-### 8.8 Nastavení
+### 8.10 Nastavení
 
 Časový limit solveru (logaritmický posuvník), semínko varianty (🎲), limity za den /
 za týden, začátek odpoledne, auto-uvolnění, přehled pravidla 7 h, **váhy měkkých
-kritérií** (posuvníky), limity tříd (přepis raných / odpoledních; odškrtnuto = ∞),
+kritérií** (posuvníky, vč. „preferovaná třída učitele“), limity tříd (přepis raných / odpoledních; odškrtnuto = ∞),
 následníci tříd.
 
-### 8.9 Report
+### 8.11 Report
 
 **Zátěže učitelů** (vždy – i před generováním; semafor ≥26 oranžová, ≥31
 červená), varování, problémy, statistiky tříd (hodiny, 7:20 dny, odpolední,
@@ -546,7 +585,8 @@ skupin, osobní rozvrhy, zátěže učitelů, tisk (třídy, učitelé, žáci),
 semináře dopoledne, 15:15 dle pohlaví, editace+undo+validace, průvodce novým rokem,
 import voleb/katalogů z minulého roku, perzistence, vláknové generování se zastavením,
 váhy v Nastavení, volno učitelů (mřížka 5×12), varianty přes semínko, režim příkazové
-řádky, automatické testy (`tests/zakladni.rs`).
+řádky, **profily učitelů a předmětů** (záložky Učitelé / Předměty), **preferované třídy
+učitele** v řešiči, automatické testy (`tests/`).
 
 Ověřeno na seed datech (17 tříd, 426 zástupních žáků, 698 lekcí): **0 tvrdých problémů**,
 bez oken ve všech třídách, úvazky nejvýše 21 h; limit 30 s.
@@ -642,8 +682,11 @@ vyrovnání týdenní zátěže učitelů, oktávová AJ ve 4 skupinách napří
 | `src/solver.rs` | LekceInfo/Vysledek, postav_lekce, model (profily, konflikty, bazény místností), generuj (greedy + žíhání + slep_bloky), piny, L/S, auto-uvolnění, místnosti, zátěže |
 | `src/validation.rs` | zkontroluj() – plná validace per žák a týden + statistiky tříd |
 | `src/export.rs` | HTML tisk (třídy, učitelé, žáci), CSV, XML, textový report |
-| `src/app.rs` | UI (obrazovky, průvodce, editace, exporty, piny, zátěže, rozdělení skupin) |
-| `tests/zakladni.rs` | testy: 15:15, odhad pohlaví, seed, přechod roku, volby, validace, řešič, piny, uložení |
+| `src/profily.rs` | odvozená data profilů: kdo co učí, ve kterých třídách, kolik hodin (plán + volby) |
+| `src/app.rs` | UI (obrazovky vč. profilů učitelů a předmětů, průvodce, editace, exporty, piny, zátěže, rozdělení skupin) |
+| `tests/zakladni.rs` | testy: 15:15, odhad pohlaví, seed, přechod roku, volby, validace, řešič, piny, uložení, profily |
+| `tests/preference_ucitele.rs` | preferované třídy učitele v řešiči, zpětná kompatibilita JSON |
+| `docs/superpowers/specs/` | návrhy funkcí (profily učitelů a předmětů) |
 
 ---
 

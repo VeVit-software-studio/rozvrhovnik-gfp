@@ -232,3 +232,17 @@ fn projekt_se_ulozi_a_nacte() {
     assert_eq!(q.rozvrh.as_ref().unwrap().lekce.len(), p.rozvrh.as_ref().unwrap().lekce.len());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn profily_vyuky_odpovidaji_uvazkum() {
+    let p = vychozi();
+    let v = rozvrhovnik::profily::vyuka(&p.skola, &p.rok);
+    for (u, h) in solver::zateze(&p.skola, &p.rok) {
+        let soucet: f32 = v.iter().filter(|x| x.ucitel == u).map(|x| x.hodin).sum();
+        assert!((soucet - h).abs() < 0.01, "{u}: profil {soucet} ≠ úvazek {h}");
+    }
+    // L/S hodiny se v profilu počítají pod skutečnými předměty, ne pod popiskem „DV/VV“
+    assert!(v.iter().any(|x| x.predmet == "DV" && x.tridy == ["prima"] && x.skupina == "L" && x.hodin == 1.0));
+    let tridy = rozvrhovnik::profily::tridy_vyuky(&p.skola.tridy, v.iter().filter(|x| x.predmet == "INF"));
+    assert_eq!(tridy.first().map(String::as_str), Some("prima"));
+}

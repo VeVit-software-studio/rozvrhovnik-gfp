@@ -7,6 +7,7 @@
 use eframe::egui::{self, Color32, RichText, Ui};
 use rozvrhovnik::data::*;
 use rozvrhovnik::export::{self, Pohled};
+use rozvrhovnik::profily::{self, Vyuka};
 use rozvrhovnik::rok::{self, NovyZak, Zmena};
 use rozvrhovnik::solver::{self, Prubeh, Vysledek};
 use rozvrhovnik::validation::{self, Kontrola};
@@ -28,6 +29,8 @@ enum Obrazovka {
     Studenti,
     Volitelne,
     Plan,
+    Ucitele,
+    Predmety,
     Ciselniky,
     Nastaveni,
     Report,
@@ -103,6 +106,11 @@ pub struct RozvrhApp {
     rozdelit: Rozdelit,
     // plán
     plan_trida: String,
+    // profily učitelů a předmětů
+    sel_profil_ucitel: String,
+    sel_profil_predmet: String,
+    hledat_profil: String,
+    vyuka: Option<Vec<Vyuka>>,
     // číselníky
     cis: u8,
     novy_id: String,
@@ -124,6 +132,7 @@ impl RozvrhApp {
         let sel_trida = p.skola.tridy.first().map(|t| t.id.clone()).unwrap_or_default();
         let sel_ucitel = p.skola.ucitele.first().map(|t| t.id.clone()).unwrap_or_default();
         let sel_mistnost = p.skola.mistnosti.first().map(|t| t.id.clone()).unwrap_or_default();
+        let sel_profil_predmet = p.skola.predmety.first().map(|t| t.id.clone()).unwrap_or_default();
         let zprava = if cesta.exists() {
             format!("Načteno: {}", cesta.display())
         } else {
@@ -138,7 +147,7 @@ impl RozvrhApp {
             zprava,
             druh: Druh::Trida,
             sel_trida: sel_trida.clone(),
-            sel_ucitel,
+            sel_ucitel: sel_ucitel.clone(),
             sel_mistnost,
             sel_zak: None,
             vybrana: None,
@@ -149,6 +158,10 @@ impl RozvrhApp {
             menu_sel: 0,
             rozdelit: None,
             plan_trida: sel_trida,
+            sel_profil_ucitel: sel_ucitel,
+            sel_profil_predmet,
+            hledat_profil: String::new(),
+            vyuka: None,
             cis: 0,
             novy_id: String::new(),
             volno_ucitel: None,
@@ -340,6 +353,8 @@ impl RozvrhApp {
                 (Obrazovka::Studenti, "👥 Studenti"),
                 (Obrazovka::Volitelne, "☑ Volitelné"),
                 (Obrazovka::Plan, "📚 Učební plán"),
+                (Obrazovka::Ucitele, "🎓 Učitelé"),
+                (Obrazovka::Predmety, "📖 Předměty"),
                 (Obrazovka::Ciselniky, "📇 Číselníky"),
                 (Obrazovka::Nastaveni, "⚙ Nastavení"),
                 (Obrazovka::Report, "📊 Report"),
@@ -347,8 +362,9 @@ impl RozvrhApp {
             for (o, t) in taby {
                 if ui.selectable_label(self.obr == o, RichText::new(t).size(15.0)).clicked() {
                     self.obr = o;
-                    if o == Obrazovka::Report {
+                    if matches!(o, Obrazovka::Report | Obrazovka::Ucitele | Obrazovka::Predmety) {
                         self.zateze = None;
+                        self.vyuka = None;
                     }
                 }
             }
@@ -896,6 +912,364 @@ impl RozvrhApp {
         }
     }
 
+    // ───────────── obrazovky Učitelé a Předměty (profily) ─────────────
+
+    fn zajisti_profily(&mut self) {
+        if self.zateze.is_none() {
+            self.zateze = Some(solver::zateze(&self.p.skola, &self.p.rok));
+        }
+        if self.vyuka.is_none() {
+            self.vyuka = Some(profily::vyuka(&self.p.skola, &self.p.rok));
+        }
+    }
+
+    fn obrazovka_ucitele(&mut self, ui: &mut Ui) {
+        self.zajisti_profily();
+        if self.p.skola.ucitele.iter().all(|u| u.id != self.sel_profil_ucitel) {
+            self.sel_profil_ucitel = self.p.skola.ucitele.first().map(|u| u.id.clone()).unwrap_or_default();
+        }
+        let zateze: BTreeMap<String, f32> = self.zateze.clone().unwrap_or_default().into_iter().collect();
+        let vyuka = self.vyuka.take().unwrap_or_default();
+        let mut zobrazit_rozvrh = false;
+
+        egui::SidePanel::left("uc-seznam").resizable(true).default_width(270.0).show_inside(ui, |ui| {
+            ui.heading("Učitelé");
+            ui.add(egui::TextEdit::singleline(&mut self.hledat_profil).hint_text("hledat zkratku / jméno"));
+            ui.label(RichText::new("úvazek h/týden · ≥ 26 oranžově, ≥ 31 červeně").weak().small());
+            let hledat = self.hledat_profil.to_lowercase();
+            egui::ScrollArea::vertical().id_source("uc-sc").auto_shrink([false, false]).show(ui, |ui| {
+                for u in &self.p.skola.ucitele {
+                    if !hledat.is_empty()
+                        && !u.id.to_lowercase().contains(&hledat)
+                        && !u.jmeno.to_lowercase().contains(&hledat)
+                    {
+                        continue;
+                    }
+                    let h = zateze.get(&u.id).copied().unwrap_or(0.0);
+                    let text =
+                        RichText::new(format!("{}  {}  ·  {:.1} h", u.id, u.jmeno, h)).color(barva_uvazku(ui, h));
+                    if ui.selectable_label(self.sel_profil_ucitel == u.id, text).clicked() {
+                        self.sel_profil_ucitel = u.id.clone();
+                    }
+                }
+            });
+        });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            let Skola { ucitele, tridy, predmety, .. } = &mut self.p.skola;
+            let Some(u) = ucitele.iter_mut().find(|u| u.id == self.sel_profil_ucitel) else {
+                ui.label("Žádný učitel – přidejte ho v Číselníkách.");
+                return;
+            };
+            let moje: Vec<&Vyuka> = vyuka.iter().filter(|v| v.ucitel == u.id).collect();
+            egui::ScrollArea::vertical().id_source("uc-profil").auto_shrink([false, false]).show(ui, |ui| {
+                ui.heading(RichText::new(format!("{} – {}", u.id, u.jmeno)).strong());
+                ui.label(
+                    RichText::new(
+                        "Zkratka, jméno, max. hodin/den, volno a preferovaná učebna se upravují v Číselníkách.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.add_space(4.0);
+                let h = zateze.get(&u.id).copied().unwrap_or(0.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Úvazek:").strong());
+                    ui.label(RichText::new(format!("{:.1} h/týden", h)).strong().size(16.0).color(barva_uvazku(ui, h)));
+                    ui.add(egui::ProgressBar::new((h / 31.0).min(1.0)).desired_width(160.0));
+                    ui.label(format!("· max {} h/den", u.max_den));
+                    if !u.volno.is_empty() {
+                        ui.label(format!("· volno {} slotů", u.volno.len()));
+                    }
+                    if let Some(m) = &u.preferovana_mistnost {
+                        ui.label(format!("· preferovaná učebna {}", m));
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(v) = &self.p.rozvrh {
+                        let hodin: f32 = v
+                            .lekce
+                            .iter()
+                            .zip(&v.slot)
+                            .filter(|(l, s)| l.ucitel == u.id && s.is_some())
+                            .map(|(l, _)| l.len as f32 * if l.tyden == solver::Tyden::Oba { 1.0 } else { 0.5 })
+                            .sum();
+                        ui.label(format!("V rozvrhu {}: {:.1} h/týden.", v.rok, hodin));
+                    } else {
+                        ui.label(RichText::new("Rozvrh zatím není vygenerován.").weak());
+                    }
+                    if ui.button("📅 Zobrazit rozvrh").on_hover_text("Otevře rozvrh tohoto učitele").clicked() {
+                        zobrazit_rozvrh = true;
+                    }
+                });
+                ui.separator();
+
+                ui.label(RichText::new("Preferované třídy").strong());
+                ui.horizontal_wrapped(|ui| {
+                    if u.preferovane_tridy.is_empty() {
+                        ui.label(RichText::new("žádné").weak());
+                    }
+                    for t in &u.preferovane_tridy {
+                        ui.label(RichText::new(format!("⭐ {}", nazev_tridy(tridy, t))).color(MODRA));
+                    }
+                    ui.menu_button("Upravit…", |ui| {
+                        for t in tridy.iter() {
+                            let mut b = u.preferovane_tridy.contains(&t.id);
+                            if ui.checkbox(&mut b, &t.nazev).changed() {
+                                if b {
+                                    u.preferovane_tridy.push(t.id.clone());
+                                    u.preferovane_tridy.sort_by_key(|x| tridy.iter().position(|y| &y.id == x));
+                                } else {
+                                    u.preferovane_tridy.retain(|x| x != &t.id);
+                                }
+                            }
+                        }
+                    });
+                });
+                ui.label(
+                    RichText::new(
+                        "Řešič dává preferovaným třídám tohoto učitele přednostně hodiny mimo 7:20 a odpoledne \
+                         (na úkor ostatních jeho tříd). Váha: Nastavení ➡ „preferovaná třída učitele“.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                ui.separator();
+
+                ui.label(RichText::new("Vyučované předměty").strong());
+                let mut po_predmetech: BTreeMap<&str, f32> = BTreeMap::new();
+                for v in &moje {
+                    *po_predmetech.entry(v.predmet.as_str()).or_default() += v.hodin;
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if po_predmetech.is_empty() {
+                        ui.label(RichText::new("neučí nic (není v plánu ani ve volbách)").weak());
+                    }
+                    for (p, h) in &po_predmetech {
+                        let nazev = predmety.iter().find(|x| x.id == *p).map_or("", |x| x.nazev.as_str());
+                        ui.label(format!("{} {} ({:.1} h)", p, nazev, h)).on_hover_text(*p);
+                        ui.label("·");
+                    }
+                });
+                ui.add_space(4.0);
+                ui.label(RichText::new("Vyučované třídy").strong());
+                ui.horizontal_wrapped(|ui| {
+                    let seznam = profily::tridy_vyuky(tridy, moje.iter().copied());
+                    if seznam.is_empty() {
+                        ui.label(RichText::new("žádné").weak());
+                    }
+                    for t in seznam {
+                        let v_planu: f32 =
+                            moje.iter().filter(|v| v.menu.is_none() && v.tridy.contains(&t)).map(|v| v.hodin).sum();
+                        let volitelne = moje.iter().any(|v| v.menu.is_some() && v.tridy.contains(&t));
+                        let mut text = nazev_tridy(tridy, &t);
+                        if v_planu > 0.0 {
+                            text.push_str(&format!(" {:.1} h", v_planu));
+                        }
+                        if volitelne {
+                            text.push_str(" + volitelné");
+                        }
+                        let rt = RichText::new(text);
+                        ui.label(if u.preferovane_tridy.contains(&t) { rt.color(MODRA) } else { rt });
+                        ui.label("·");
+                    }
+                });
+                ui.separator();
+
+                ui.label(RichText::new("Co učí (učební plán a katalogy voleb)").strong());
+                egui::Grid::new("uc-vyuka").striped(true).show(ui, |ui| {
+                    for h in ["Předmět", "Třída", "Skupina", "h/týden", "Volitelné"] {
+                        ui.label(RichText::new(h).strong());
+                    }
+                    ui.end_row();
+                    for v in &moje {
+                        let nazev = predmety.iter().find(|x| x.id == v.predmet).map_or("", |x| x.nazev.as_str());
+                        ui.label(format!("{} {}", v.predmet, nazev));
+                        ui.label(v.tridy.iter().map(|t| nazev_tridy(tridy, t)).collect::<Vec<_>>().join(" + "));
+                        ui.label(&v.skupina);
+                        ui.label(format!("{:.1}", v.hodin));
+                        match (&v.menu, v.zaku) {
+                            (Some(m), Some(0)) => ui.label(RichText::new(format!("{m} – bez žáků")).weak()),
+                            (Some(m), Some(z)) => ui.label(format!("{m} – {z} žáků")),
+                            (Some(m), None) => ui.label(m),
+                            (None, _) => ui.label(""),
+                        };
+                        ui.end_row();
+                    }
+                });
+            });
+        });
+
+        if zobrazit_rozvrh {
+            self.druh = Druh::Ucitel;
+            self.sel_ucitel = self.sel_profil_ucitel.clone();
+            self.vybrana = None;
+            self.obr = Obrazovka::Rozvrh;
+        }
+        self.vyuka = Some(vyuka);
+    }
+
+    fn obrazovka_predmety(&mut self, ui: &mut Ui) {
+        self.zajisti_profily();
+        if self.p.skola.predmety.iter().all(|p| p.id != self.sel_profil_predmet) {
+            self.sel_profil_predmet = self.p.skola.predmety.first().map(|p| p.id.clone()).unwrap_or_default();
+        }
+        let vyuka = self.vyuka.take().unwrap_or_default();
+
+        egui::SidePanel::left("pr-seznam").resizable(true).default_width(290.0).show_inside(ui, |ui| {
+            ui.heading("Předměty");
+            ui.add(egui::TextEdit::singleline(&mut self.hledat_profil).hint_text("hledat zkratku / název"));
+            let hledat = self.hledat_profil.to_lowercase();
+            egui::ScrollArea::vertical().id_source("pr-sc").auto_shrink([false, false]).show(ui, |ui| {
+                for p in &self.p.skola.predmety {
+                    if !hledat.is_empty()
+                        && !p.id.to_lowercase().contains(&hledat)
+                        && !p.nazev.to_lowercase().contains(&hledat)
+                    {
+                        continue;
+                    }
+                    let h: f32 = vyuka.iter().filter(|v| v.predmet == p.id).map(|v| v.hodin).sum::<f32>() + 0.0; // bez „-0“
+                    let zamek = if !p.kmenova_ok && !p.specialni_mistnosti.is_empty() { "🔒 " } else { "" };
+                    let text = format!("{}{}  {}  ·  {:.0} h", zamek, p.id, p.nazev, h);
+                    let rt = if h == 0.0 { RichText::new(text).weak() } else { RichText::new(text) };
+                    if ui.selectable_label(self.sel_profil_predmet == p.id, rt).clicked() {
+                        self.sel_profil_predmet = p.id.clone();
+                    }
+                }
+            });
+        });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            let Skola { ucitele, tridy, predmety, mistnosti, .. } = &mut self.p.skola;
+            let Some(p) = predmety.iter_mut().find(|p| p.id == self.sel_profil_predmet) else {
+                ui.label("Žádný předmět – přidejte ho v Číselníkách.");
+                return;
+            };
+            let jeho: Vec<&Vyuka> = vyuka.iter().filter(|v| v.predmet == p.id).collect();
+            egui::ScrollArea::vertical().id_source("pr-profil").auto_shrink([false, false]).show(ui, |ui| {
+                ui.heading(RichText::new(format!("{} – {}", p.id, p.nazev)).strong());
+                ui.horizontal(|ui| {
+                    ui.label("Název:");
+                    ui.add_sized([320.0, 20.0], egui::TextEdit::singleline(&mut p.nazev));
+                    let h: f32 = jeho.iter().map(|v| v.hodin).sum::<f32>() + 0.0;
+                    ui.label(format!("· celkem {:.1} h/týden", h));
+                });
+                ui.separator();
+
+                ui.label(RichText::new("Učebny").strong());
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut p.kmenova_ok, "Smí do kmenové učebny")
+                        .on_hover_text("Odškrtnuto = odborné učebny jsou povinné (předmět se jinde učit nesmí)");
+                    ui.label("· odborné učebny:");
+                    let text = if p.specialni_mistnosti.is_empty() {
+                        "—".to_string()
+                    } else {
+                        p.specialni_mistnosti.join(", ")
+                    };
+                    ui.menu_button(format!("{} …", text), |ui| {
+                        for m in mistnosti.iter().filter(|m| !m.kmenova) {
+                            let mut b = p.specialni_mistnosti.contains(&m.id);
+                            if ui.checkbox(&mut b, format!("{} – {} ({} míst)", m.id, m.nazev, m.kapacita)).changed()
+                            {
+                                if b {
+                                    p.specialni_mistnosti.push(m.id.clone());
+                                } else {
+                                    p.specialni_mistnosti.retain(|x| x != &m.id);
+                                }
+                            }
+                        }
+                    });
+                });
+                let seznam: Vec<String> = p
+                    .specialni_mistnosti
+                    .iter()
+                    .map(|id| match mistnosti.iter().find(|m| &m.id == id) {
+                        Some(m) => format!("{} ({} míst)", m.id, m.kapacita),
+                        None => format!("{} (neexistuje!)", id),
+                    })
+                    .collect();
+                let (text, barva) = match (p.kmenova_ok, seznam.is_empty()) {
+                    (false, false) => (
+                        format!("🔒 Povinné učebny: jen {} – jinde se předmět učit nesmí.", seznam.join(", ")),
+                        ORANZOVA,
+                    ),
+                    (true, false) => (
+                        format!(
+                            "⭐ Preferované učebny (v tomto pořadí): {}. Když jsou obsazené, použije se kmenová třída \
+                             nebo jiná volná kmenová učebna.",
+                            seznam.join(", ")
+                        ),
+                        MODRA,
+                    ),
+                    (true, true) => {
+                        ("Bez odborné učebny – učí se v kmenové třídě.".to_string(), ui.visuals().text_color())
+                    }
+                    (false, true) => (
+                        "⚠ Předmět nesmí do kmenové, ale nemá žádnou odbornou učebnu – použije se kmenová.".to_string(),
+                        CERVENA,
+                    ),
+                };
+                ui.label(RichText::new(text).color(barva));
+                if let Some(v) = &self.p.rozvrh {
+                    let lekce: Vec<usize> =
+                        (0..v.lekce.len()).filter(|&i| v.lekce[i].predmet == p.id && v.slot[i].is_some()).collect();
+                    if !lekce.is_empty() && !p.specialni_mistnosti.is_empty() {
+                        let v_odborne = lekce
+                            .iter()
+                            .filter(|&&i| v.mistnost[i].as_ref().is_some_and(|m| p.specialni_mistnosti.contains(m)))
+                            .count();
+                        ui.label(format!(
+                            "V rozvrhu {}: {} z {} hodin v odborné učebně.",
+                            v.rok,
+                            v_odborne,
+                            lekce.len()
+                        ));
+                    }
+                }
+                ui.separator();
+
+                ui.label(RichText::new("Vyučující").strong());
+                if jeho.is_empty() {
+                    ui.label(RichText::new("Předmět se neučí (není v plánu ani ve volbách).").weak());
+                }
+                egui::Grid::new("pr-vyuka").striped(true).show(ui, |ui| {
+                    for h in ["Třída", "Skupina", "Učitel", "h/týden", "Volitelné"] {
+                        ui.label(RichText::new(h).strong());
+                    }
+                    ui.end_row();
+                    for v in &jeho {
+                        ui.label(v.tridy.iter().map(|t| nazev_tridy(tridy, t)).collect::<Vec<_>>().join(" + "));
+                        ui.label(&v.skupina);
+                        let jmeno = ucitele.iter().find(|u| u.id == v.ucitel).map_or("?", |u| u.jmeno.as_str());
+                        ui.label(format!("{} – {}", v.ucitel, jmeno));
+                        ui.label(format!("{:.1}", v.hodin));
+                        match (&v.menu, v.zaku) {
+                            (Some(m), Some(z)) => ui.label(format!("{m} – {z} žáků")),
+                            (Some(m), None) => ui.label(m),
+                            (None, _) => ui.label(""),
+                        };
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(4.0);
+                ui.label(RichText::new("Třídy a skupiny").strong());
+                ui.horizontal_wrapped(|ui| {
+                    for t in profily::tridy_vyuky(tridy, jeho.iter().copied()) {
+                        ui.label(nazev_tridy(tridy, &t));
+                        ui.label("·");
+                    }
+                    let mut menu: Vec<&str> = jeho.iter().filter_map(|v| v.menu.as_deref()).collect();
+                    menu.dedup();
+                    for m in menu {
+                        ui.label(RichText::new(m).italics());
+                        ui.label("·");
+                    }
+                });
+            });
+        });
+        self.vyuka = Some(vyuka);
+    }
+
     // ───────────── obrazovka Číselníky ─────────────
 
     fn obrazovka_ciselniky(&mut self, ui: &mut Ui) {
@@ -927,6 +1301,7 @@ impl RozvrhApp {
                         volno: vec![],
                         max_den: 7,
                         preferovana_mistnost: None,
+                        preferovane_tridy: vec![],
                     }),
                     3 if s.predmet(&id).is_none() => s.predmety.push(Predmet {
                         id: id.clone(),
@@ -1164,6 +1539,10 @@ impl RozvrhApp {
             ui.add(egui::Slider::new(&mut v.seminar_odpoledne, 0..=20).text("seminář odpoledne / h"));
             ui.add(egui::Slider::new(&mut v.rozlozeni, 0..=20).text("stejný předmět 2× za den"));
             ui.add(egui::Slider::new(&mut v.ucitel_okno, 0..=20).text("okno učitele"));
+            ui.add(
+                egui::Slider::new(&mut v.ucitel_preference, 0..=20)
+                    .text("preferovaná třída učitele (její hodina v 7:20 / odpoledne)"),
+            );
             if ui.button("Obnovit výchozí váhy").clicked() {
                 *v = Vahy::default();
             }
@@ -1638,6 +2017,8 @@ impl eframe::App for RozvrhApp {
                 editor_voleb(ui, &self.p.skola, &mut self.p.rok, stary, &mut self.menu_sel, &mut self.rozdelit, "vol");
             }
             Obrazovka::Plan => self.obrazovka_plan(ui),
+            Obrazovka::Ucitele => self.obrazovka_ucitele(ui),
+            Obrazovka::Predmety => self.obrazovka_predmety(ui),
             Obrazovka::Ciselniky => self.obrazovka_ciselniky(ui),
             Obrazovka::Nastaveni => self.obrazovka_nastaveni(ui),
             Obrazovka::Report => self.obrazovka_report(ui),
@@ -1913,6 +2294,21 @@ fn editor_voleb(
 }
 
 // ───────────────────────────── pomocné widgety ─────────────────────────────
+
+fn nazev_tridy(tridy: &[Trida], id: &str) -> String {
+    tridy.iter().find(|t| t.id == id).map_or_else(|| id.to_string(), |t| t.nazev.clone())
+}
+
+/// Semafor úvazku: ≥ 31 h červeně, ≥ 26 h oranžově.
+fn barva_uvazku(ui: &Ui, h: f32) -> Color32 {
+    if h >= 31.0 {
+        CERVENA
+    } else if h >= 26.0 {
+        ORANZOVA
+    } else {
+        ui.visuals().text_color()
+    }
+}
 
 fn combo_trida(ui: &mut Ui, id: impl std::hash::Hash, tridy: &[Trida], val: &mut String) {
     let text = tridy.iter().find(|t| &t.id == val).map_or(val.clone(), |t| t.nazev.clone());
