@@ -5,6 +5,8 @@
 //! během výpůjčky `&self.p.rozvrh` a aplikují se až po jejím uvolnění.
 
 use eframe::egui::{self, Color32, RichText, Ui};
+mod import_ui;
+
 use rozvrhovnik::data::*;
 use rozvrhovnik::export::{self, Pohled};
 use rozvrhovnik::profily::{self, Vyuka};
@@ -82,6 +84,8 @@ struct Pruvodce {
     novy: Option<SkolniRok>,
     menu_sel: usize,
     rozdelit: Rozdelit,
+    /// Krok 1: uživatel chce načíst žáky vstupní třídy (id) ze souboru.
+    pozadavek_souboru: Option<String>,
 }
 
 pub struct RozvrhApp {
@@ -118,6 +122,8 @@ pub struct RozvrhApp {
     volno_ucitel: Option<String>,
     // soubory
     otevrit_okno: bool,
+    /// Import/export seznamu žáků (okna, náhled).
+    io: import_ui::ImportStav,
     cesta_text: String,
     pruvodce: Option<Pruvodce>,
     // cache pro report
@@ -167,6 +173,7 @@ impl RozvrhApp {
             novy_id: String::new(),
             volno_ucitel: None,
             otevrit_okno: false,
+            io: Default::default(),
             pruvodce: None,
             zateze: None,
             kontrola: None,
@@ -681,6 +688,7 @@ impl RozvrhApp {
     // ───────────── obrazovka Studenti ─────────────
 
     fn obrazovka_studenti(&mut self, ui: &mut Ui) {
+        self.io_lista(ui);
         let skola = &self.p.skola;
         let rok = &mut self.p.rok;
         ui.horizontal_wrapped(|ui| {
@@ -1754,8 +1762,12 @@ impl RozvrhApp {
             }
             return;
         }
+        let pozadavek = pr.pozadavek_souboru.take();
         if otevreno {
             self.pruvodce = Some(pr);
+        }
+        if let Some(t) = pozadavek {
+            self.zahaj_import(import_ui::Ucel::Pruvodce(t));
         }
     }
 
@@ -1794,6 +1806,7 @@ impl Pruvodce {
             novy: None,
             menu_sel: 0,
             rozdelit: None,
+            pozadavek_souboru: None,
         }
     }
 
@@ -1837,6 +1850,15 @@ impl Pruvodce {
                         .hint_text("Jana Nováková\nPetr Svoboda\n…"),
                 );
                 ui.vertical(|ui| {
+                    if ui
+                        .button("📂 Načíst ze souboru…")
+                        .on_hover_text(
+                            "txt, csv, Excel (xlsx / xls / ods) nebo json – jména (a případně pohlaví a skupinu AJ)",
+                        )
+                        .clicked()
+                    {
+                        self.pozadavek_souboru = Some(t.clone());
+                    }
                     if ui.button(RichText::new("Načíst a rozdělit (15:15)").strong()).clicked() {
                         let zaci = rok::novi_zaci_z_textu(self.texty.get(&t).map(|s| s.as_str()).unwrap_or(""));
                         self.novi.insert(t.clone(), zaci);
@@ -2035,6 +2057,7 @@ impl eframe::App for RozvrhApp {
         });
         self.okno_pruvodce(ctx);
         self.okno_otevrit(ctx);
+        self.okna_io(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

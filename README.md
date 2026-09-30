@@ -433,7 +433,9 @@ nejdelší blok, průměrná okna).
 ### 8.2 Průvodce novým rokem (4 kroky)
 
 0. **Rok** – označení nového roku (automaticky další, např. 2027/28).
-1. **Noví žáci** – jména po řádcích do textových polí vstupních tříd (prima, první A);
+1. **Noví žáci** – jména po řádcích do textových polí vstupních tříd (prima, první A) nebo
+   **📂 Načíst ze souboru…** (txt, csv, Excel, json – jména, případně pohlaví a skupina AJ; řádky
+   jiných tříd se přeskočí);
    pohlaví se odhadne ze jména (-ová/-á = dívka), lze zapsat „Jméno Příjmení; D“ / „; CH“.
    „Načíst a rozdělit (15:15)“ vytvoří skupiny (dívky/chlapci střídavě s
    offsetem → vyrovnané poměry), ruční přesuny tlačítky →AJa/→AJb,
@@ -466,6 +468,13 @@ nejdelší blok, průměrná okna).
 Filtr třídy; editace jmen, třídy, AJ skupiny, pohlaví, **stavu (aktivní / propadá /
 odešel)**; počet menu s volbami (tooltip = volby); ruční přidání žáka (skupina AJ se
 doplní do menší, pohlaví odhadem); ✖ smazat; „⚖ Rozdělit AJ 15:15“ pro vybranou třídu.
+
+**Import a export seznamu žáků** (lišta „Seznam žáků“ nad tabulkou, podrobně kap. 10.1):
+- **⬆ Import…** – txt, csv, Excel (xlsx / xls / ods) a json; soubor lze také **přetáhnout do okna**.
+  Před importem se ukáže náhled (rozpoznané sloupce, počty podle tříd, problémové řádky, prvních
+  12 žáků) a volba režimu: přidat/aktualizovat, nahradit třídy uvedené v souboru, nahradit vše.
+- **⬇ Export** – CSV, JSON, Excel (.xlsx), TXT (volitelně jen jména); exportuje se výběr podle
+  filtru třídy (nebo všichni žáci).
 
 ### 8.5 Volitelné
 
@@ -572,7 +581,57 @@ Python referenční verze (v0.1, OR-Tools) není součástí repozitáře.
 Z příkazové řádky `--export <adresář>` zapíše všech pět souborů najednou.
 
 **Bakaláři**: pro přímý import je potřeba vzorový exportní/importní soubor
-z instalace školy → dodá se konvertor „⬇ Bakaláři“.
+z instalace školy → dodá se konvertor „⬇ Bakaláři“. (Seznam žáků ve formátu Excel/CSV z Bakalářů
+lze ale načíst už dnes – viz 10.1.)
+
+### 10.1 Seznam žáků – import a export
+
+**Import** (`src/studenti_io.rs`): `.txt`, `.csv` / `.tsv`, `.xlsx` / `.xls` / `.ods` (první list s daty)
+a `.json`.
+
+| Co | Jak se pozná |
+|---|---|
+| **Sloupce s hlavičkou** | Jméno, Příjmení (dohromady „Jméno Příjmení“), Třída, AJ / Skupina, Pohlaví, Stav, Volby; ostatní sloupce (např. „Č.“, „Poznámka“) se ignorují |
+| **Bez hlavičky** | podle obsahu buňky: třída (`prima`, `kvarta A`, `1.A`), `AJa`/`AJb`, `D`/`CH`/`Ž`/`M`, stav, `menu=volba`; zbytek = jméno. Samotný seznam jmen (jedno na řádek) funguje také |
+| **Třída** | id nebo název, bez ohledu na velikost písmen, mezery, tečky a diakritiku (`kvartaA`, `Kvarta A`, `1.A`, `první A`) |
+| **Oddělovač** | `;` `,` nebo tabulátor – odhadne se |
+| **Kódování** | UTF-8 (s BOM i bez), UTF-16 s BOM a **Windows-1250** (český Excel „CSV“) – při jiném než UTF-8 upozornění |
+| **Pohlaví** | `D`, `Ž`, `dívka`, `F` ➡ D; `CH`, `M`, `chlapec` ➡ CH; chybí-li, odhad ze jména |
+| **Stav** | aktivní / propadá / odešel |
+| **Volby** | `menu=V1,V2\|menu2=V3` (menu oddělená svislítkem, id nebo názvy); ověřují se proti katalogům (menu se musí týkat třídy žáka, počet voleb) |
+| **JSON** | pole jmen, pole objektů, nebo `{"studenti": [...]}` (formát exportu) |
+
+Řádky, které nejde zařadit (neznámá třída, chybějící třída bez zvolené výchozí), se přeskočí a
+vypíšou se. Řádky bez třídy lze zařadit do „výchozí třídy“ zvolené v náhledu (předvyplněná podle filtru).
+
+**Režimy importu:**
+1. *Přidat nové a aktualizovat stávající* (výchozí) – žák se stejným jménem ve stejné třídě se
+   aktualizuje (skupina, pohlaví, stav, volby podle souboru), ostatní se přidají; duplicita
+   v souboru se přeskočí.
+2. *Nahradit žáky tříd uvedených v souboru* – stávající žáci těchto tříd (i s volbami) se smažou.
+3. *Nahradit všechny žáky.*
+
+U režimů 2 a 3 náhled červeně uvede, kolik stávajících žáků se smaže. Noví žáci bez skupiny AJ:
+celá nová třída se rozdělí 15:15 podle pohlaví, jinak se doplňují do menší skupiny. Po importu je
+třeba rozvrh přegenerovat.
+
+**Export** (obrazovka Studenti; exportuje se výběr podle filtru třídy, jinak všichni; pořadí tříd
+podle číselníku):
+
+| Formát | Obsah |
+|---|---|
+| **CSV** | `Jméno;Třída;AJ;Pohlaví;Stav;Volby` – UTF-8 s BOM, středníky, CRLF ➡ rovnou do Excelu |
+| **Excel (.xlsx)** | list „Studenti“, tučná ukotvená hlavička, automatický filtr, šířky sloupců |
+| **JSON** | `{"rok": "...", "studenti": [{jmeno, trida, trida_nazev, skupina_aj, pohlavi, stav, volby{menu:[volby]}}]}` |
+| **TXT** | `Jméno; Třída; AJ; Pohlaví[; Stav][; Volby]`, jeden žák na řádek; volba „TXT jen jména“ ➡ jen jména |
+
+Všechny formáty lze znovu naimportovat (ověřeno testem `export_a_zpetny_import_ve_vsech_formatech`).
+Na Windows/macOS se soubor vybírá / ukládá nativním dialogem; na Linuxu se exporty ukládají do
+`./export/` a v okně importu se nabízejí soubory z aktuální složky a z `./import/` (nebo zadejte cestu,
+případně soubor přetáhněte do okna).
+
+⚠ Seznamy žáků jsou osobní údaje – složky `import/` a `export/` jsou v `.gitignore`, aby se nedostaly
+do repozitáře.
 
 ---
 
@@ -672,7 +731,7 @@ vyrovnání týdenní zátěže učitelů, oktávová AJ ve 4 skupinách napří
 
 | Soubor | Obsah |
 |---|---|
-| `Cargo.toml` | eframe 0.27, serde, serde_json, rand 0.8, rfd 0.14 (jen Windows/macOS) |
+| `Cargo.toml` | eframe 0.27, serde, serde_json, rand 0.8, calamine (čtení Excelu), rust_xlsxwriter (zápis .xlsx), encoding_rs (Windows-1250), rfd 0.14 (jen Windows/macOS) |
 | `src/lib.rs` | kořen knihovny `rozvrhovnik` (bez GUI) |
 | `src/main.rs` | bootstrap eframe + režim příkazové řádky `--generuj` |
 | `src/napoveda.txt` | text `--help` |
@@ -681,9 +740,12 @@ vyrovnání týdenní zátěže učitelů, oktávová AJ ve 4 skupinách napří
 | `src/solver.rs` | LekceInfo/Vysledek, postav_lekce, model (profily, konflikty, bazény místností), generuj (greedy + žíhání + slep_bloky), piny, L/S, auto-uvolnění, místnosti, zátěže |
 | `src/validation.rs` | zkontroluj() – plná validace per žák a týden + statistiky tříd |
 | `src/export.rs` | HTML tisk (třídy, učitelé, žáci), CSV, XML, textový report |
+| `src/studenti_io.rs` | import (txt, csv, xlsx/xls/ods, json) a export (csv, json, xlsx, txt) seznamu žáků, plán a aplikace importu (režimy) |
+| `src/app/import_ui.rs` | GUI importu/exportu žáků: lišta, náhled, výběr souboru, přetažení, načtení do průvodce |
 | `src/profily.rs` | odvozená data profilů: kdo co učí, ve kterých třídách, kolik hodin (plán + volby) |
 | `src/app.rs` | UI (obrazovky vč. profilů učitelů a předmětů, průvodce, editace, exporty, piny, zátěže, rozdělení skupin) |
 | `tests/zakladni.rs` | testy: 15:15, odhad pohlaví, seed, přechod roku, volby, validace, řešič, piny, uložení, profily |
+| `tests/studenti_io.rs` | testy importu/exportu žáků: parsování, kódování, Excel, režimy, zpětný import všech formátů |
 | `tests/preference_ucitele.rs` | preferované třídy učitele v řešiči, zpětná kompatibilita JSON |
 | `docs/superpowers/specs/` | návrhy funkcí (profily učitelů a předmětů) |
 

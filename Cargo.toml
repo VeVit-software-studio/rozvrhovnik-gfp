@@ -18,6 +18,9 @@ eframe = "0.27"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.8"
+calamine = "0.36"
+rust_xlsxwriter = "0.99"
+encoding_rs = "0.8"
 
 # Nativní dialogy pro otevření/uložení souboru. Na Linuxu by rfd vyžadovalo GTK,
 # proto se tam soubory ukládají do složky ./export a cesta se zadává textem.

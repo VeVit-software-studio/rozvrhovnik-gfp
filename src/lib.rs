@@ -19,4 +19,5 @@ pub mod export;
 pub mod profily;
 pub mod rok;
 pub mod solver;
+pub mod studenti_io;
 pub mod validation;
