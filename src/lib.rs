@@ -14,10 +14,13 @@
     clippy::manual_repeat_n
 )]
 
+pub mod bloky;
 pub mod data;
+pub mod demo;
 pub mod export;
 pub mod profily;
 pub mod rok;
+pub mod skupiny_io;
 pub mod solver;
 pub mod studenti_io;
 pub mod validation;

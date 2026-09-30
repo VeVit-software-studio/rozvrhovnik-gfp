@@ -79,10 +79,17 @@ pub struct Trida {
     pub naslednik: Option<String>,
     #[serde(default)]
     pub omezeni_prepsat: Option<Omezeni>,
+    /// Jiné názvy třídy v importovaných souborech (např. „7.A“ z Bakalářů), oddělené čárkou.
+    #[serde(default)]
+    pub alias: String,
 }
 
 impl Trida {
     /// 4leté třídy se pro omezení a volitelné předměty chovají jako vyšší gymnázium: 1A→5 … 4A→8.
+    pub fn aliasy(&self) -> impl Iterator<Item = &str> {
+        self.alias.split(',').map(str::trim).filter(|a| !a.is_empty())
+    }
+
     pub fn efektivni_rocnik(&self) -> u8 {
         match self.typ {
             TypStudia::Osmilete => self.rocnik,
@@ -355,7 +362,7 @@ impl Student {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Volba {
     pub id: String,
     pub nazev: String,
@@ -363,6 +370,23 @@ pub struct Volba {
     pub ucitel: String,
     #[serde(default)]
     pub kapacita: Option<u32>,
+    /// Blok seminářů (1, 2, 3 …): volby jednoho bloku běží paralelně ve stejném čase.
+    #[serde(default)]
+    pub blok: Option<u8>,
+    /// Učitel pro jednotlivé hodiny týdně (1. hodina, 2. hodina …), např. NJ: 2 h UHR + 1 h KOŠ.
+    /// U menu s dvouhodinovými bloky platí položka pro celý blok. Prázdné / chybějící položky = `ucitel`.
+    #[serde(default)]
+    pub ucitele_hodin: Vec<String>,
+}
+
+impl Volba {
+    /// Učitel i-té hodiny týdně (počítáno od 0).
+    pub fn ucitel_hodiny(&self, i: usize) -> &str {
+        match self.ucitele_hodin.get(i) {
+            Some(u) if !u.is_empty() => u,
+            _ => &self.ucitel,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -446,6 +470,27 @@ fn t(id: &str, nazev: &str, rocnik: u8, typ: TypStudia, kmenova: &str, nasl: Opt
         kmenova: kmenova.into(),
         naslednik: nasl.map(|s| s.into()),
         omezeni_prepsat: None,
+        alias: vychozi_alias(id).into(),
+    }
+}
+
+/// Názvy tříd v exportech školy (Bakaláři / MS SQL): vyšší gymnázium „5.A“ … „8.B“, čtyřleté „1.A“ … „4.A“.
+/// Kvarta a nižší nemají alias – „4.A“ by kolidovalo se čtvrtou A (⚠ doplnit podle školy).
+fn vychozi_alias(id: &str) -> &'static str {
+    match id {
+        "kvintaA" => "5.A",
+        "kvintaB" => "5.B",
+        "sextaA" => "6.A",
+        "sextaB" => "6.B",
+        "septimaA" => "7.A",
+        "septimaB" => "7.B",
+        "oktavaA" => "8.A",
+        "oktavaB" => "8.B",
+        "1A" => "1.A",
+        "2A" => "2.A",
+        "3A" => "3.A",
+        "4A" => "4.A",
+        _ => "",
     }
 }
 
@@ -785,7 +830,7 @@ fn pol(predmet: &str, ucitel: String) -> Pol {
 fn volba(id: &str, nazev: &str, predmet: &str, ucitel: String) -> Volba {
     // kapacita podle jediné odborné pracovny (PVV, PHV = 28 míst)
     let kapacita = matches!(predmet, "VV" | "HV").then_some(28);
-    Volba { id: id.into(), nazev: nazev.into(), predmet: predmet.into(), ucitel, kapacita }
+    Volba { id: id.into(), nazev: nazev.into(), predmet: predmet.into(), ucitel, kapacita, ..Default::default() }
 }
 
 const SEMINARE_7: [&str; 14] =

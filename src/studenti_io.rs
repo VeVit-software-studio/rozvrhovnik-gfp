@@ -1,7 +1,8 @@
 //! Import a export seznamu žáků.
 //!
-//! Import: `.txt`, `.csv`/`.tsv`, `.xlsx`/`.xls`/`.ods` (Excel, první list s daty) a `.json`.
-//! Sloupce se poznají podle hlavičky (Jméno, Příjmení, Třída, AJ/Skupina, Pohlaví, Stav, Volby),
+//! Import: `.txt`, `.csv`/`.tsv`, `.xlsx`/`.xls`/`.ods` (Excel, první list s daty), `.dbf` (dBase/FoxPro)
+//! a `.json`. Sloupce se poznají podle hlavičky (Jméno, Příjmení, Třída, AJ/Skupina, Pohlaví, Rodné číslo,
+//! Stav, Volby),
 //! bez hlavičky podle obsahu buněk (třída, AJa/AJb, D/CH, stav, zbytek = jméno).
 //! Export: `.csv` (UTF-8 s BOM, středníky – rovnou do Excelu), `.json`, `.xlsx`, `.txt`.
 //! Soubor z exportu lze znovu naimportovat (včetně voleb).
@@ -22,6 +23,8 @@ pub enum Format {
     Json,
     Xlsx,
     Txt,
+    /// Jen import (dBase / FoxPro, export z MS SQL).
+    Dbf,
 }
 
 impl Format {
@@ -33,6 +36,7 @@ impl Format {
             Format::Json => "json",
             Format::Xlsx => "xlsx",
             Format::Txt => "txt",
+            Format::Dbf => "dbf",
         }
     }
     pub fn nazev(self) -> &'static str {
@@ -41,12 +45,13 @@ impl Format {
             Format::Json => "JSON",
             Format::Xlsx => "Excel (.xlsx)",
             Format::Txt => "TXT",
+            Format::Dbf => "DBF",
         }
     }
 }
 
 /// Přípony, které umí import.
-pub const PRIPONY_IMPORTU: [&str; 8] = ["txt", "csv", "tsv", "xlsx", "xls", "ods", "xlsm", "json"];
+pub const PRIPONY_IMPORTU: [&str; 9] = ["txt", "csv", "tsv", "xlsx", "xls", "ods", "xlsm", "dbf", "json"];
 
 pub fn je_soubor_importu(cesta: &Path) -> bool {
     cesta.extension().and_then(|e| e.to_str()).is_some_and(|e| PRIPONY_IMPORTU.contains(&e.to_lowercase().as_str()))
@@ -108,17 +113,63 @@ fn cisti_jmeno(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").trim_matches('"').trim().to_string()
 }
 
-/// Najde třídu podle id nebo názvu („kvarta A“, „kvartaA“, „1.A“), případně podle kmenové učebny.
+/// Najde třídu podle id, názvu nebo aliasu („kvarta A“, „kvartaA“, „7.A“), případně podle kmenové
+/// učebny. Když zápisu odpovídá víc tříd (nejednoznačný alias), vrátí `None`.
 pub fn najdi_tridu(skola: &Skola, text: &str) -> Option<String> {
     let n = norm(text);
     if n.is_empty() {
         return None;
     }
-    if let Some(t) = skola.tridy.iter().find(|t| norm(&t.id) == n || norm(&t.nazev) == n) {
-        return Some(t.id.clone());
+    let shody: Vec<&Trida> = skola
+        .tridy
+        .iter()
+        .filter(|t| norm(&t.id) == n || norm(&t.nazev) == n || t.aliasy().any(|a| norm(a) == n))
+        .collect();
+    match shody.len() {
+        1 => return Some(shody[0].id.clone()),
+        0 => {}
+        _ => return None,
     }
     let podle_ucebny: Vec<&Trida> = skola.tridy.iter().filter(|t| norm(&t.kmenova) == n).collect();
     (podle_ucebny.len() == 1).then(|| podle_ucebny[0].id.clone())
+}
+
+/// Třídy, kterým zápis odpovídá víc než jednou (pro srozumitelné hlášení nejednoznačnosti).
+pub fn nejednoznacna_trida(skola: &Skola, text: &str) -> Vec<String> {
+    let n = norm(text);
+    let v: Vec<String> = skola
+        .tridy
+        .iter()
+        .filter(|t| norm(&t.id) == n || norm(&t.nazev) == n || t.aliasy().any(|a| norm(a) == n))
+        .map(|t| t.nazev.clone())
+        .collect();
+    if v.len() > 1 {
+        v
+    } else {
+        vec![]
+    }
+}
+
+/// Klíč jména nezávislý na pořadí a diakritice: „Brokl Marek“ = „Marek Brokl“ = „marek BROKL“.
+pub fn klic_jmena(jmeno: &str) -> String {
+    let mut slova: Vec<String> = jmeno.split_whitespace().map(norm).filter(|s| !s.is_empty()).collect();
+    slova.sort();
+    slova.join(" ")
+}
+
+/// Pohlaví z rodného čísla (tak ho určují Bakaláři): u žen je k měsíci přičteno 50 (od roku 2004
+/// případně 70). Rodné číslo se nikam neukládá.
+pub fn pohlavi_z_rc(rc: &str) -> Option<Pohlavi> {
+    let cislice: Vec<u32> = rc.chars().filter_map(|c| c.to_digit(10)).collect();
+    if cislice.len() < 9 {
+        return None;
+    }
+    let mesic = cislice[2] * 10 + cislice[3];
+    match mesic {
+        1..=12 | 21..=32 => Some(Pohlavi::CH),
+        51..=62 | 71..=82 => Some(Pohlavi::D),
+        _ => None,
+    }
 }
 
 pub fn parsuj_pohlavi(s: &str) -> Option<Pohlavi> {
@@ -262,6 +313,7 @@ enum Sloupec {
     Pohlavi,
     Stav,
     Volby,
+    RodneCislo,
 }
 
 fn sloupec_z_hlavicky(h: &str) -> Option<Sloupec> {
@@ -269,12 +321,13 @@ fn sloupec_z_hlavicky(h: &str) -> Option<Sloupec> {
         "jmeno" | "krestni" | "krestnijmeno" | "firstname" | "givenname" => Sloupec::Jmeno,
         "prijmeni" | "surname" | "lastname" | "familyname" => Sloupec::Prijmeni,
         "jmenoaprijmeni" | "prijmenijmeno" | "prijmeniajmeno" | "zak" | "zaci" | "zakyne" | "student" | "studenti"
-        | "name" | "fullname" | "celejmeno" => Sloupec::CeleJmeno,
-        "trida" | "class" | "tr" | "ztrida" | "tridaid" => Sloupec::Trida,
+        | "name" | "fullname" | "celejmeno" | "jmenozaka" | "zakjmeno" | "prijmeniajmenozaka" => Sloupec::CeleJmeno,
+        "trida" | "class" | "tr" | "ztrida" | "tridaid" | "tridazaka" | "kmenovatrida" => Sloupec::Trida,
         "skupina" | "aj" | "skupinaaj" | "group" | "skupinaanglictiny" => Sloupec::Skupina,
         "pohlavi" | "pohl" | "gender" | "sex" => Sloupec::Pohlavi,
         "stav" | "status" | "stavzaka" => Sloupec::Stav,
         "volby" | "volitelne" | "volitelnepredmety" | "seminare" => Sloupec::Volby,
+        "rodnecislo" | "rc" | "rodnec" | "rodcislo" | "birthnumber" => Sloupec::RodneCislo,
         _ => return None,
     })
 }
@@ -318,6 +371,7 @@ pub fn zpracuj_tabulku(skola: &Skola, format: Format, radky: Vec<Vec<String>>) -
         for (cislo, bunky) in radky.iter().skip(1) {
             let mut z = Zaznam { radek: *cislo, ..Default::default() };
             let (mut krestni, mut prijmeni, mut cele) = (String::new(), String::new(), String::new());
+            let mut pohlavi_rc: Option<Pohlavi> = None;
             for (i, b) in bunky.iter().enumerate() {
                 let Some(Some(s)) = mapovani.get(i) else { continue };
                 if b.is_empty() {
@@ -343,7 +397,15 @@ pub fn zpracuj_tabulku(skola: &Skola, format: Format, radky: Vec<Vec<String>>) -
                         }
                     },
                     Sloupec::Volby => z.volby = parsuj_volby(b),
+                    Sloupec::RodneCislo => match pohlavi_z_rc(b) {
+                        Some(p) => pohlavi_rc = Some(p),
+                        None => upozorneni.push(format!("Řádek {cislo}: z rodného čísla nelze určit pohlaví.")),
+                    },
                 }
+            }
+            // sloupec Pohlaví má přednost před rodným číslem
+            if z.pohlavi.is_none() {
+                z.pohlavi = pohlavi_rc;
             }
             // „Jméno“ + „Příjmení“ ve dvou sloupcích → „Jméno Příjmení“ (jako v aplikaci)
             z.jmeno = if !cele.is_empty() { cele } else { format!("{} {}", krestni, prijmeni) };
@@ -391,7 +453,17 @@ pub fn zpracuj_tabulku(skola: &Skola, format: Format, radky: Vec<Vec<String>>) -
 
 // ───────────────────────────── načtení souboru ─────────────────────────────
 
-pub fn nacti_text(skola: &Skola, format: Format, bajty: &[u8], koncovka_tsv: bool) -> Result<Nacteno, String> {
+/// Tabulka načtená z libovolného podporovaného souboru (bez interpretace sloupců).
+pub struct Tabulka {
+    pub format: Format,
+    pub radky: Vec<Vec<String>>,
+    /// Číslo řádku v souboru, které odpovídá prvnímu řádku `radky`, mínus 1 (Excel: začátek oblasti).
+    pub posun_radku: usize,
+    pub upozorneni: Vec<String>,
+}
+
+/// Rozdělí text na řádky a buňky (odhad oddělovače; bez oddělovače = jeden sloupec).
+pub fn text_na_tabulku(format: Format, bajty: &[u8], koncovka_tsv: bool) -> Tabulka {
     let (text, kodovani) = dekoduj(bajty);
     let oddelovac = if koncovka_tsv { Some('\t') } else { odhadni_oddelovac(&text) };
     let radky: Vec<Vec<String>> = match oddelovac {
@@ -399,10 +471,14 @@ pub fn nacti_text(skola: &Skola, format: Format, bajty: &[u8], koncovka_tsv: boo
         // jeden sloupec (seznam jmen): jeden řádek = jedna buňka, bez zpracování uvozovek
         None => text.lines().map(|l| vec![l.trim().trim_matches('"').to_string()]).collect(),
     };
-    let mut n = zpracuj_tabulku(skola, format, radky)?;
-    if let Some(k) = kodovani {
-        n.upozorneni.insert(0, format!("Kódování souboru není UTF-8, použito {k}."));
-    }
+    let upozorneni = kodovani.map(|k| format!("Kódování souboru není UTF-8, použito {k}.")).into_iter().collect();
+    Tabulka { format, radky, posun_radku: 0, upozorneni }
+}
+
+pub fn nacti_text(skola: &Skola, format: Format, bajty: &[u8], koncovka_tsv: bool) -> Result<Nacteno, String> {
+    let t = text_na_tabulku(format, bajty, koncovka_tsv);
+    let mut n = zpracuj_tabulku(skola, format, t.radky)?;
+    n.upozorneni.splice(0..0, t.upozorneni);
     Ok(n)
 }
 
@@ -414,11 +490,12 @@ fn bunka_na_text(b: &Data) -> String {
     }
 }
 
-fn nacti_excel(skola: &Skola, cesta: &Path) -> Result<Nacteno, String> {
+/// První list sešitu, který obsahuje data.
+pub fn excel_na_tabulku(cesta: &Path) -> Result<Tabulka, String> {
     let mut wb = open_workbook_auto(cesta).map_err(|e| format!("Nelze otevřít Excel {}: {e}", cesta.display()))?;
     let listy = wb.sheet_names();
     let mut upozorneni = Vec::new();
-    for (i, list) in listy.iter().enumerate() {
+    for list in &listy {
         let range = match wb.worksheet_range(list) {
             Ok(r) => r,
             Err(e) => {
@@ -431,20 +508,157 @@ fn nacti_excel(skola: &Skola, cesta: &Path) -> Result<Nacteno, String> {
         if !radky.iter().any(|r| r.iter().any(|b| !b.trim().is_empty())) {
             continue;
         }
-        let mut n = zpracuj_tabulku(skola, Format::Xlsx, radky)?;
-        // čísla řádků v Excelu začínají na prvním neprázdném řádku oblasti
-        let posun = range.start().map_or(0, |(r, _)| r as usize);
-        for z in &mut n.zaznamy {
-            z.radek += posun;
-        }
         if listy.len() > 1 {
             upozorneni.push(format!("Sešit má {} listů – načten list „{}“.", listy.len(), list));
         }
-        let _ = i;
-        n.upozorneni.splice(0..0, upozorneni);
-        return Ok(n);
+        // čísla řádků v Excelu začínají na prvním neprázdném řádku oblasti
+        let posun_radku = range.start().map_or(0, |(r, _)| r as usize);
+        return Ok(Tabulka { format: Format::Xlsx, radky, posun_radku, upozorneni });
     }
     Err("Excel neobsahuje žádný list s daty.".into())
+}
+
+// ───────────────────────────── DBF (dBase / FoxPro) ─────────────────────────────
+
+/// CP852 (DOS Latin 2) – horní polovina tabulky (vygenerováno z kodeku cp852).
+const CP852: &str = "ÇüéâäůćçłëŐőîŹÄĆÉĹĺôöĽľŚśÖÜŤťŁ×čáíóúĄąŽžĘę¬źČş«»░▒▓│┤ÁÂĚŞ╣║╗╝Żż┐└┴┬├─┼Ăă╚╔╩╦╠═╬¤đĐĎËďŇÍÎě┘┌█▄ŢŮ▀ÓßÔŃńňŠšŔÚŕŰýÝţ´\u{AD}˝˛ˇ˘§÷¸°¨˙űŘř■\u{A0}";
+
+fn dekoduj_cp852(b: &[u8]) -> String {
+    let horni: Vec<char> = CP852.chars().collect();
+    b.iter().map(|&x| if x < 0x80 { x as char } else { horni[(x - 0x80) as usize] }).collect()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum KodovaniDbf {
+    Utf8,
+    Cp852,
+    Cp1250,
+    Cp1252,
+}
+
+impl KodovaniDbf {
+    fn nazev(self) -> &'static str {
+        match self {
+            KodovaniDbf::Utf8 => "UTF-8",
+            KodovaniDbf::Cp852 => "CP852 (DOS Latin 2)",
+            KodovaniDbf::Cp1250 => "Windows-1250",
+            KodovaniDbf::Cp1252 => "Windows-1252",
+        }
+    }
+    fn dekoduj(self, b: &[u8]) -> String {
+        match self {
+            KodovaniDbf::Utf8 => String::from_utf8_lossy(b).into_owned(),
+            KodovaniDbf::Cp852 => dekoduj_cp852(b),
+            KodovaniDbf::Cp1250 => encoding_rs::WINDOWS_1250.decode_without_bom_handling(b).0.into_owned(),
+            KodovaniDbf::Cp1252 => encoding_rs::WINDOWS_1252.decode_without_bom_handling(b).0.into_owned(),
+        }
+    }
+}
+
+/// Skóre „češtiny“: kolik znaků je běžná česká písmena s diakritikou (pro odhad kódování).
+fn skore_cestiny(text: &str) -> i64 {
+    const CESKE: &str = "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ";
+    text.chars()
+        .map(|c| {
+            if CESKE.contains(c) {
+                2
+            } else if c.is_alphanumeric() || c.is_whitespace() || ".,-'/()".contains(c) {
+                0
+            } else {
+                -3
+            }
+        })
+        .sum()
+}
+
+/// Načte tabulku z DBF (dBase III / FoxPro): hlavička = názvy polí, smazané záznamy se přeskočí.
+/// Kódování podle značky jazyka v hlavičce, jinak odhad (UTF-8 / CP852 / Windows-1250).
+pub fn dbf_na_tabulku(bajty: &[u8]) -> Result<Tabulka, String> {
+    let chyba = || "Poškozený nebo nepodporovaný soubor DBF.".to_string();
+    if bajty.len() < 33 {
+        return Err(chyba());
+    }
+    let pocet = u32::from_le_bytes([bajty[4], bajty[5], bajty[6], bajty[7]]) as usize;
+    let delka_hlavicky = u16::from_le_bytes([bajty[8], bajty[9]]) as usize;
+    let delka_zaznamu = u16::from_le_bytes([bajty[10], bajty[11]]) as usize;
+    let jazyk = bajty[29];
+    if delka_hlavicky < 33 || delka_hlavicky > bajty.len() || delka_zaznamu < 2 {
+        return Err(chyba());
+    }
+    // popisy polí po 32 bajtech od offsetu 32, ukončené 0x0D
+    let mut pole: Vec<(Vec<u8>, u8, usize)> = Vec::new();
+    let mut o = 32;
+    while o + 32 <= delka_hlavicky && bajty[o] != 0x0D {
+        let nazev: Vec<u8> = bajty[o..o + 11].iter().copied().take_while(|&b| b != 0).collect();
+        pole.push((nazev, bajty[o + 11], bajty[o + 16] as usize));
+        o += 32;
+    }
+    if pole.is_empty() || pole.iter().map(|p| p.2).sum::<usize>() + 1 > delka_zaznamu {
+        return Err(chyba());
+    }
+    // syrové textové hodnoty
+    let mut syrove: Vec<Vec<Vec<u8>>> = Vec::new();
+    for i in 0..pocet {
+        let zacatek = delka_hlavicky + i * delka_zaznamu;
+        let Some(z) = bajty.get(zacatek..zacatek + delka_zaznamu) else { break };
+        if z[0] == b'*' {
+            continue; // smazaný záznam
+        }
+        let mut p = 1;
+        let mut radek = Vec::new();
+        for (_, typ, delka) in &pole {
+            let hodnota = &z[p..p + delka];
+            p += delka;
+            radek.push(match typ {
+                b'C' | b'N' | b'F' | b'D' | b'L' | b'V' => hodnota.to_vec(),
+                _ => Vec::new(), // memo/binární pole se nečtou
+            });
+        }
+        syrove.push(radek);
+    }
+    let mut kodovani = match jazyk {
+        0x64 | 0x87 => Some(KodovaniDbf::Cp852),
+        0xC8 => Some(KodovaniDbf::Cp1250),
+        0x03 | 0x57 => Some(KodovaniDbf::Cp1252),
+        _ => None,
+    };
+    let mut upozorneni = Vec::new();
+    if kodovani.is_none() {
+        let vse: Vec<u8> = syrove.iter().flatten().flatten().copied().collect();
+        kodovani = Some(if std::str::from_utf8(&vse).is_ok() {
+            KodovaniDbf::Utf8
+        } else {
+            [KodovaniDbf::Cp852, KodovaniDbf::Cp1250]
+                .into_iter()
+                .max_by_key(|k| skore_cestiny(&k.dekoduj(&vse)))
+                .unwrap()
+        });
+        let k = kodovani.unwrap();
+        if k != KodovaniDbf::Utf8 {
+            upozorneni.push(format!("DBF bez značky kódování – odhadnuto {}.", k.nazev()));
+        }
+    }
+    let k = kodovani.unwrap();
+    let mut radky: Vec<Vec<String>> = vec![pole.iter().map(|(n, _, _)| k.dekoduj(n).trim().to_string()).collect()];
+    for r in syrove {
+        radky.push(r.iter().map(|b| k.dekoduj(b).trim().to_string()).collect());
+    }
+    Ok(Tabulka { format: Format::Dbf, radky, posun_radku: 0, upozorneni })
+}
+
+/// Načte tabulku ze souboru podle přípony (txt, csv, tsv, xlsx, xls, ods, dbf).
+pub fn nacti_tabulku(cesta: &Path) -> Result<Tabulka, String> {
+    let pripona = cesta.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let cti = || std::fs::read(cesta).map_err(|e| format!("Nelze číst {}: {e}", cesta.display()));
+    match pripona.as_str() {
+        "xlsx" | "xls" | "ods" | "xlsm" | "xlsb" => excel_na_tabulku(cesta),
+        "dbf" => dbf_na_tabulku(&cti()?),
+        "csv" => Ok(text_na_tabulku(Format::Csv, &cti()?, false)),
+        "tsv" => Ok(text_na_tabulku(Format::Csv, &cti()?, true)),
+        "txt" => Ok(text_na_tabulku(Format::Txt, &cti()?, false)),
+        "" => Err(format!("Soubor {} nemá příponu – podporuji txt, csv, xlsx, xls, ods, dbf.", cesta.display())),
+        p => Err(format!("Nepodporovaný formát „.{p}“ – podporuji txt, csv, tsv, xlsx, xls, ods, dbf.")),
+    }
 }
 
 fn text_z_hodnoty(v: &Value) -> Option<String> {
@@ -534,20 +748,17 @@ fn nacti_json(bajty: &[u8]) -> Result<Nacteno, String> {
 /// Načte soubor podle přípony.
 pub fn nacti(skola: &Skola, cesta: &Path) -> Result<Nacteno, String> {
     let pripona = cesta.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    match pripona.as_str() {
-        "xlsx" | "xls" | "ods" | "xlsm" | "xlsb" => nacti_excel(skola, cesta),
-        "json" | "csv" | "tsv" | "txt" => {
-            let bajty = std::fs::read(cesta).map_err(|e| format!("Nelze číst {}: {e}", cesta.display()))?;
-            match pripona.as_str() {
-                "json" => nacti_json(&bajty),
-                "csv" => nacti_text(skola, Format::Csv, &bajty, false),
-                "tsv" => nacti_text(skola, Format::Csv, &bajty, true),
-                _ => nacti_text(skola, Format::Txt, &bajty, false),
-            }
-        }
-        "" => Err(format!("Soubor {} nemá příponu – podporuji txt, csv, xlsx, xls, ods, json.", cesta.display())),
-        p => Err(format!("Nepodporovaný formát „.{p}“ – podporuji txt, csv, tsv, xlsx, xls, ods, json.")),
+    if pripona == "json" {
+        let bajty = std::fs::read(cesta).map_err(|e| format!("Nelze číst {}: {e}", cesta.display()))?;
+        return nacti_json(&bajty);
     }
+    let t = nacti_tabulku(cesta).map_err(|e| e.replace("dbf.", "dbf, json."))?;
+    let mut n = zpracuj_tabulku(skola, t.format, t.radky)?;
+    for z in &mut n.zaznamy {
+        z.radek += t.posun_radku;
+    }
+    n.upozorneni.splice(0..0, t.upozorneni);
+    Ok(n)
 }
 
 // ───────────────────────────── plán a aplikace importu ─────────────────────────────
@@ -616,7 +827,21 @@ pub fn naplanuj(skola: &Skola, zaznamy: &[Zaznam], vychozi_trida: &str) -> Plan 
             Some(t) => match najdi_tridu(skola, t) {
                 Some(id) => id,
                 None => {
-                    plan.problemy.push(format!("Řádek {}: {} – neznámá třída „{}“, přeskočen.", z.radek, z.jmeno, t));
+                    let vic = nejednoznacna_trida(skola, t);
+                    if vic.is_empty() {
+                        plan.problemy.push(format!(
+                            "Řádek {}: {} – neznámá třída „{}“ (doplňte alias v Číselníky ➡ Třídy), přeskočen.",
+                            z.radek, z.jmeno, t
+                        ));
+                    } else {
+                        plan.problemy.push(format!(
+                            "Řádek {}: {} – třída „{}“ je nejednoznačná ({}), přeskočen.",
+                            z.radek,
+                            z.jmeno,
+                            t,
+                            vic.join(", ")
+                        ));
+                    }
                     continue;
                 }
             },
@@ -725,14 +950,14 @@ pub fn aplikuj(skola: &Skola, rok: &mut SkolniRok, plan: &Plan, rezim: Rezim) ->
     let mut nove_bez_skupiny: Vec<u32> = Vec::new();
     for p in &plan.polozky {
         let z = &p.zaznam;
-        let klic = (norm(&z.jmeno), p.trida.clone());
+        let klic = (klic_jmena(&z.jmeno), p.trida.clone());
         if !videno.insert(klic.clone()) {
             v.preskoceno += 1;
             v.varovani.push(format!("Řádek {}: duplicitní žák {} ve třídě {} – přeskočen.", z.radek, z.jmeno, p.trida));
             continue;
         }
         let volby = over_volby(rok, &p.trida, &z.volby, z, &mut v.varovani);
-        if let Some(i) = rok.studenti.iter().position(|s| s.trida == p.trida && norm(&s.jmeno) == klic.0) {
+        if let Some(i) = rok.studenti.iter().position(|s| s.trida == p.trida && klic_jmena(&s.jmeno) == klic.0) {
             let s = &mut rok.studenti[i];
             if let Some(g) = z.skupina {
                 s.skupina_aj = g;
@@ -918,5 +1143,6 @@ pub fn exportuj(
         Format::Json => zapis(json_text(skola, rok, studenti)),
         Format::Txt => zapis(txt_text(skola, studenti, m)),
         Format::Xlsx => zapis_xlsx(skola, studenti, cesta),
+        Format::Dbf => Err("Export do DBF není podporován – použijte CSV nebo Excel.".into()),
     }
 }

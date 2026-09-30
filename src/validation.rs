@@ -63,7 +63,9 @@ pub fn zkontroluj(skola: &Skola, v: &Vysledek) -> Kontrola {
         let l = &v.lekce[i];
         for &w in l.tyden.tydny() {
             for t in s as usize..s as usize + l.len as usize {
-                uc.entry((l.ucitel.as_str(), w, t)).or_default().push(i);
+                if !l.ucitel.is_empty() {
+                    uc.entry((l.ucitel.as_str(), w, t)).or_default().push(i);
+                }
                 if let Some(r) = &v.mistnost[i] {
                     mi.entry((r.as_str(), w, t)).or_default().push(i);
                 }
@@ -232,6 +234,10 @@ pub fn zkontroluj(skola: &Skola, v: &Vysledek) -> Kontrola {
     for i in 0..n {
         let Some(s) = v.slot[i] else { continue };
         let l = &v.lekce[i];
+        if l.ucitel.is_empty() {
+            k.varovani.push(format!("Bez učitele: {}", popis_lekce(l)));
+            continue;
+        }
         let o = uc_occ.entry(l.ucitel.as_str()).or_insert([false; N_SLOTU]);
         for t in s as usize..s as usize + l.len as usize {
             o[t] = true;

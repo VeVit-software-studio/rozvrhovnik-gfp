@@ -336,3 +336,90 @@ fn trida_se_pozna_ruznymi_zapisy() {
     assert_eq!(io::najdi_tridu(&s, "9.Z"), None);
     assert_eq!(io::najdi_tridu(&s, ""), None);
 }
+
+// ───────────── aliasy tříd, rodné číslo, DBF, pořadí jména ─────────────
+
+#[test]
+fn aliasy_trid_z_exportu_skoly() {
+    let s = skola();
+    for (zapis, id) in [("7.A", "septimaA"), ("7.B", "septimaB"), ("8.b", "oktavaB"), ("3.A", "3A"), ("5.A", "kvintaA")]
+    {
+        assert_eq!(io::najdi_tridu(&s, zapis), Some(id.to_string()), "{zapis}");
+    }
+    // nejednoznačný alias → nic (a srozumitelné hlášení)
+    let mut s2 = s.clone();
+    s2.tridy.iter_mut().find(|t| t.id == "kvartaA").unwrap().alias = "4.A".into();
+    assert_eq!(io::najdi_tridu(&s2, "4.A"), None);
+    assert_eq!(io::nejednoznacna_trida(&s2, "4.A").len(), 2);
+    let z = io::nacti_text(&s2, Format::Csv, "Jméno;Třída\nJana Nováková;4.A\n".as_bytes(), false).unwrap();
+    let plan = io::naplanuj(&s2, &z.zaznamy, "");
+    assert!(plan.problemy[0].contains("nejednoznačná"), "{:?}", plan.problemy);
+}
+
+#[test]
+fn pohlavi_z_rodneho_cisla() {
+    assert_eq!(io::pohlavi_z_rc("085512/1234"), Some(Pohlavi::D));
+    assert_eq!(io::pohlavi_z_rc("0803051234"), Some(Pohlavi::CH));
+    assert_eq!(io::pohlavi_z_rc("087512/123"), Some(Pohlavi::D)); // +70 (od 2004)
+    assert_eq!(io::pohlavi_z_rc("082512/1234"), Some(Pohlavi::CH)); // +20
+    assert_eq!(io::pohlavi_z_rc("abc"), None);
+    let s = skola();
+    // sloupec Pohlaví má přednost; rodné číslo se neukládá
+    let text = "Jméno;Třída;Rodné číslo;Pohlaví\nKim Lee;prima;085512/1234;\nAlex Novák;prima;085512/1234;CH\n";
+    let n = io::nacti_text(&s, Format::Csv, text.as_bytes(), false).unwrap();
+    assert_eq!(n.zaznamy[0].pohlavi, Some(Pohlavi::D));
+    assert_eq!(n.zaznamy[1].pohlavi, Some(Pohlavi::CH));
+}
+
+#[test]
+fn hlavicka_z_nastroje_na_seminare() {
+    // sloupce „Jméno žáka“ a „Třída žáka“ (Příjmení Jméno)
+    let s = skola();
+    let text = "Seminář;Jméno žáka;Třída žáka\nSBI1;Brokl Marek;7.B\n;Dolanský Jan;7.B\n";
+    let n = io::nacti_text(&s, Format::Csv, text.as_bytes(), false).unwrap();
+    assert_eq!(n.zaznamy.len(), 2);
+    assert_eq!(n.zaznamy[0].jmeno, "Brokl Marek");
+    assert_eq!(io::najdi_tridu(&s, n.zaznamy[1].trida.as_deref().unwrap()), Some("septimaB".into()));
+}
+
+#[test]
+fn dbf_cp852_i_bez_znacky_kodovani() {
+    let s = skola();
+    for (soubor, upozorneni) in [("zaci_cp852.dbf", false), ("zaci_1250_bez_znacky.dbf", true)] {
+        let cesta = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(soubor);
+        let n = io::nacti(&s, &cesta).unwrap_or_else(|e| panic!("{soubor}: {e}"));
+        assert_eq!(n.format, Format::Dbf);
+        let jmena: Vec<&str> = n.zaznamy.iter().map(|z| z.jmeno.as_str()).collect();
+        // smazaný záznam chybí; Jméno + Příjmení ze dvou sloupců
+        assert_eq!(jmena, ["Žofie Řezníčková", "Ondřej Šťastný", "Anežka Dvořáková"], "{soubor}");
+        let pohlavi: Vec<Option<Pohlavi>> = n.zaznamy.iter().map(|z| z.pohlavi).collect();
+        assert_eq!(pohlavi, [Some(Pohlavi::D), Some(Pohlavi::CH), Some(Pohlavi::D)], "{soubor}");
+        let plan = io::naplanuj(&s, &n.zaznamy, "");
+        let tridy: Vec<&str> = plan.polozky.iter().map(|p| p.trida.as_str()).collect();
+        assert_eq!(tridy, ["septimaA", "septimaB", "3A"], "{soubor}");
+        assert_eq!(n.upozorneni.iter().any(|u| u.contains("odhadnuto")), upozorneni, "{soubor}: {:?}", n.upozorneni);
+    }
+    // poškozený soubor
+    assert!(io::dbf_na_tabulku(b"nesmysl").is_err());
+}
+
+#[test]
+fn aktualizace_zaka_nezavisle_na_poradi_jmena() {
+    let p = vychozi();
+    let mut rok = p.rok.clone();
+    rok.studenti.push(Student {
+        id: 99_999,
+        jmeno: "Marek Brokl".into(),
+        trida: "septimaB".into(),
+        skupina_aj: SkupinaAj::A,
+        pohlavi: Pohlavi::CH,
+        volby: Default::default(),
+        status: StavStudenta::Aktivni,
+    });
+    let n = io::nacti_text(&p.skola, Format::Csv, "Jméno;Třída;AJ\nBROKL Marek;7.B;AJb\n".as_bytes(), false).unwrap();
+    let plan = io::naplanuj(&p.skola, &n.zaznamy, "");
+    let v = io::aplikuj(&p.skola, &mut rok, &plan, Rezim::PridatAktualizovat);
+    assert_eq!((v.pridano, v.aktualizovano), (0, 1));
+    assert_eq!(rok.student(99_999).unwrap().skupina_aj, SkupinaAj::B);
+    assert_eq!(io::klic_jmena("Hladík Jakub Antonín"), io::klic_jmena("Jakub Antonín Hladík"));
+}

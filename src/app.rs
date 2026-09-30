@@ -6,6 +6,7 @@
 
 use eframe::egui::{self, Color32, RichText, Ui};
 mod import_ui;
+mod skupiny_ui;
 
 use rozvrhovnik::data::*;
 use rozvrhovnik::export::{self, Pohled};
@@ -30,6 +31,7 @@ enum Obrazovka {
     Rozvrh,
     Studenti,
     Volitelne,
+    Bloky,
     Plan,
     Ucitele,
     Predmety,
@@ -124,6 +126,9 @@ pub struct RozvrhApp {
     otevrit_okno: bool,
     /// Import/export seznamu žáků (okna, náhled).
     io: import_ui::ImportStav,
+    /// Import skupin (semináře, jazyky).
+    skupiny: skupiny_ui::SkupinyStav,
+    bloky: skupiny_ui::BlokyStav,
     cesta_text: String,
     pruvodce: Option<Pruvodce>,
     // cache pro report
@@ -174,6 +179,8 @@ impl RozvrhApp {
             volno_ucitel: None,
             otevrit_okno: false,
             io: Default::default(),
+            skupiny: Default::default(),
+            bloky: Default::default(),
             pruvodce: None,
             zateze: None,
             kontrola: None,
@@ -360,6 +367,7 @@ impl RozvrhApp {
                 (Obrazovka::Rozvrh, "📅 Rozvrh"),
                 (Obrazovka::Studenti, "👥 Studenti"),
                 (Obrazovka::Volitelne, "☑ Volitelné"),
+                (Obrazovka::Bloky, "⊞ Bloky"),
                 (Obrazovka::Plan, "📚 Učební plán"),
                 (Obrazovka::Ucitele, "🎓 Učitelé"),
                 (Obrazovka::Predmety, "📖 Předměty"),
@@ -1300,6 +1308,7 @@ impl RozvrhApp {
                         kmenova: id.clone(),
                         naslednik: None,
                         omezeni_prepsat: None,
+                        alias: String::new(),
                     }),
                     1 if s.mistnost(&id).is_none() => {
                         s.mistnosti.push(Mistnost { id: id.clone(), nazev: id.clone(), kapacita: 30, kmenova: false })
@@ -1330,7 +1339,8 @@ impl RozvrhApp {
             0 => {
                 let ids: Vec<(String, String)> = tridy.iter().map(|t| (t.id.clone(), t.nazev.clone())).collect();
                 egui::Grid::new("cis-t").striped(true).show(ui, |ui| {
-                    for h in ["ID", "Název", "Ročník", "Typ", "Kmenová", "Následník", "Limity P1", ""] {
+                    for h in ["ID", "Název", "Ročník", "Typ", "Kmenová", "Následník", "Alias (import)", "Limity P1", ""]
+                    {
                         ui.label(RichText::new(h).strong());
                     }
                     ui.end_row();
@@ -1364,6 +1374,10 @@ impl RozvrhApp {
                                     }
                                 }
                             },
+                        );
+                        ui.add_sized([90.0, 20.0], egui::TextEdit::singleline(&mut t.alias).hint_text("např. 7.A"))
+                            .on_hover_text(
+                            "Jak se třída jmenuje v importovaných souborech (Bakaláři, MS SQL); více oddělte čárkou",
                         );
                         ui.label(t.omezeni().popis());
                         if ui.small_button("✖").clicked() {
@@ -1853,7 +1867,7 @@ impl Pruvodce {
                     if ui
                         .button("📂 Načíst ze souboru…")
                         .on_hover_text(
-                            "txt, csv, Excel (xlsx / xls / ods) nebo json – jména (a případně pohlaví a skupinu AJ)",
+                            "txt, csv, Excel (xlsx / xls / ods), DBF nebo json – jména (a případně pohlaví, rodné číslo, skupinu AJ)",
                         )
                         .clicked()
                     {
@@ -2045,9 +2059,11 @@ impl eframe::App for RozvrhApp {
             Obrazovka::Rozvrh => self.obrazovka_rozvrh(ui),
             Obrazovka::Studenti => self.obrazovka_studenti(ui),
             Obrazovka::Volitelne => {
+                self.skupiny_lista(ui);
                 let stary = self.p.historie.last();
                 editor_voleb(ui, &self.p.skola, &mut self.p.rok, stary, &mut self.menu_sel, &mut self.rozdelit, "vol");
             }
+            Obrazovka::Bloky => self.obrazovka_bloky(ui),
             Obrazovka::Plan => self.obrazovka_plan(ui),
             Obrazovka::Ucitele => self.obrazovka_ucitele(ui),
             Obrazovka::Predmety => self.obrazovka_predmety(ui),
@@ -2058,6 +2074,7 @@ impl eframe::App for RozvrhApp {
         self.okno_pruvodce(ctx);
         self.okno_otevrit(ctx);
         self.okna_io(ctx);
+        self.okna_skupin(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -2235,6 +2252,7 @@ fn editor_voleb(
                 predmet: skola.predmety.first().map(|p| p.id.clone()).unwrap_or_default(),
                 ucitel: skola.ucitele.first().map(|u| u.id.clone()).unwrap_or_default(),
                 kapacita: None,
+                ..Default::default()
             });
         }
     }

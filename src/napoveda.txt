@@ -3,6 +3,7 @@ Rozvrhovník GFP – generátor rozvrhů (Gymnázium Františka Palackého, Nera
 Použití:
   rozvrhovnik [soubor.json]            spustí aplikaci (výchozí soubor skola_data.json)
   rozvrhovnik --generuj [volby]        vygeneruje rozvrh bez GUI a vypíše report
+  rozvrhovnik --demo-data <adresář>    zapíše demo soubory (seznam žáků, semináře ve formátu školy)
 
 Volby pro --generuj:
   --data <soubor.json>   datový soubor (neexistuje-li, použijí se výchozí data)

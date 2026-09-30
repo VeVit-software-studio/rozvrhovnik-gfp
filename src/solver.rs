@@ -391,7 +391,7 @@ pub fn postav_lekce(skola: &Skola, rok: &SkolniRok) -> Vstup {
             for (i, &len) in delky.iter().enumerate() {
                 let n = Nova {
                     predmet: v.predmet.clone(),
-                    ucitel: v.ucitel.clone(),
+                    ucitel: v.ucitel_hodiny(i).to_string(),
                     tridy: tridy.iter().cloned().collect(),
                     skupina: v.id.clone(),
                     zaci: zaci.clone(),
@@ -417,9 +417,24 @@ pub fn postav_lekce(skola: &Skola, rok: &SkolniRok) -> Vstup {
                 }
             }
         } else {
-            for s in serie {
-                for x in s {
-                    jednotky.push(vec![x]);
+            // semináře: volby jednoho bloku běží paralelně (jedna jednotka na hodinu), ostatní samostatně
+            let mut podle_bloku: BTreeMap<u8, Vec<usize>> = BTreeMap::new();
+            for (vi, s) in serie.iter().enumerate() {
+                match m.volby[vi].blok {
+                    Some(b) => podle_bloku.entry(b).or_default().push(vi),
+                    None => {
+                        for &x in s {
+                            jednotky.push(vec![x]);
+                        }
+                    }
+                }
+            }
+            for volby in podle_bloku.values() {
+                for i in 0..delky.len() {
+                    let j: Vec<usize> = volby.iter().filter_map(|&vi| serie[vi].get(i).copied()).collect();
+                    if !j.is_empty() {
+                        jednotky.push(j);
+                    }
                 }
             }
         }
@@ -443,6 +458,9 @@ pub fn zateze(skola: &Skola, rok: &SkolniRok) -> Vec<(String, f32)> {
     let vstup = postav_lekce(skola, rok);
     let mut z: BTreeMap<String, f32> = skola.ucitele.iter().map(|u| (u.id.clone(), 0.0)).collect();
     for l in &vstup.lekce {
+        if l.ucitel.is_empty() {
+            continue;
+        }
         let f = if l.tyden == Tyden::Oba { 1.0 } else { 0.5 };
         *z.entry(l.ucitel.clone()).or_default() += l.len as f32 * f;
     }
@@ -635,6 +653,9 @@ impl Model {
         for (u, j) in vs.jednotky.iter().enumerate() {
             for &i in j {
                 let id = lekce[i].ucitel.as_str();
+                if id.is_empty() {
+                    continue; // skupina zatím bez učitele – bez učitelských omezení
+                }
                 let t = *uc_idx.entry(id).or_insert_with(|| {
                     teach_max.push(skola.ucitel(id).map_or(8, |x| x.max_den.max(1)));
                     teach_max.len() - 1
@@ -762,7 +783,9 @@ impl Model {
         };
         let mut podle_ucitele: HashMap<&str, Vec<usize>> = HashMap::new();
         for (i, l) in lekce.iter().enumerate() {
-            podle_ucitele.entry(l.ucitel.as_str()).or_default().push(i);
+            if !l.ucitel.is_empty() {
+                podle_ucitele.entry(l.ucitel.as_str()).or_default().push(i);
+            }
         }
         for ls in podle_ucitele.values().chain(zak_lekce.values()) {
             for x in 0..ls.len() {
@@ -1464,7 +1487,7 @@ pub fn zkontroluj_a_zapis(skola: &Skola, v: &mut Vysledek) {
     let k = validation::zkontroluj(skola, v);
     v.problemy = k.problemy;
     v.problemove_lekce = k.problemove_lekce.into_iter().collect();
-    v.varovani.retain(|x| !x.starts_with("Kapacita:") && !x.starts_with("Místnost:"));
+    v.varovani.retain(|x| !x.starts_with("Kapacita:") && !x.starts_with("Místnost:") && !x.starts_with("Bez učitele:"));
     v.varovani.extend(k.varovani);
 }
 

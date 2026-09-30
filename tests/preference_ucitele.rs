@@ -16,6 +16,7 @@ fn mala_skola(preferovane: &[&str], vaha: u32) -> (Skola, SkolniRok) {
         kmenova: format!("R{id}"),
         naslednik: None,
         omezeni_prepsat: None,
+        alias: String::new(),
     };
     let mistnost = |id: &str| Mistnost { id: id.into(), nazev: id.into(), kapacita: 30, kmenova: true };
     let predmet = |id: &str| Predmet { id: id.into(), nazev: id.into(), specialni_mistnosti: vec![], kmenova_ok: true };

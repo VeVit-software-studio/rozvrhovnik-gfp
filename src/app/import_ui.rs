@@ -13,6 +13,8 @@ pub(super) enum Ucel {
     Studenti,
     /// Noví žáci vstupní třídy v průvodci (id třídy).
     Pruvodce(String),
+    /// Rozdělení do skupin (semináře, jazyky) – obrazovka Volitelné.
+    Skupiny,
 }
 
 pub(super) struct VyberSouboru {
@@ -91,7 +93,9 @@ impl RozvrhApp {
             ui.label(RichText::new("Seznam žáků:").strong());
             if ui
                 .button("⬆ Import…")
-                .on_hover_text("txt, csv, Excel (xlsx / xls / ods) nebo json – soubor můžete také přetáhnout do okna")
+                .on_hover_text(
+                    "txt, csv, Excel (xlsx / xls / ods), DBF nebo json – soubor můžete také přetáhnout do okna",
+                )
                 .clicked()
             {
                 import = true;
@@ -158,6 +162,9 @@ impl RozvrhApp {
     }
 
     fn nacti_import(&mut self, cesta: PathBuf, ucel: Ucel) -> Result<(), String> {
+        if ucel == Ucel::Skupiny {
+            return self.nacti_skupiny(cesta);
+        }
         let n = studenti_io::nacti(&self.p.skola, &cesta)?;
         match ucel {
             Ucel::Studenti => {
@@ -170,6 +177,7 @@ impl RozvrhApp {
                 self.obr = Obrazovka::Studenti;
             }
             Ucel::Pruvodce(t) => self.pruvodce_z_nacteneho(&t, &n, &cesta),
+            Ucel::Skupiny => {}
         }
         Ok(())
     }
@@ -253,7 +261,7 @@ impl RozvrhApp {
                 .interactable(false)
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.heading("⬇ Pusťte soubor se seznamem žáků (txt, csv, xlsx, json)");
+                        ui.heading("⬇ Pusťte soubor se seznamem žáků (txt, csv, xlsx, dbf, json)");
                     });
                 });
         }
@@ -264,7 +272,9 @@ impl RozvrhApp {
             return;
         }
         self.io.vyber = None;
-        if let Err(e) = self.nacti_import(cesta, Ucel::Studenti) {
+        // na obrazovce Volitelné se přetažený soubor bere jako rozdělení do skupin
+        let ucel = if self.obr == Obrazovka::Volitelne { Ucel::Skupiny } else { Ucel::Studenti };
+        if let Err(e) = self.nacti_import(cesta, ucel) {
             self.zprava = e;
         }
     }
@@ -275,7 +285,7 @@ impl RozvrhApp {
         let mut otevreno = true;
         let mut nacist = false;
         egui::Window::new("⬆ Import seznamu žáků").open(&mut otevreno).collapsible(false).show(ctx, |ui| {
-            ui.label("Formáty: txt, csv, Excel (xlsx, xls, ods), json. Soubor můžete také přetáhnout do okna.");
+            ui.label("Formáty: txt, csv, Excel (xlsx, xls, ods), DBF, json. Soubor můžete také přetáhnout do okna.");
             ui.label("Cesta k souboru:");
             ui.horizontal(|ui| {
                 ui.add_sized(

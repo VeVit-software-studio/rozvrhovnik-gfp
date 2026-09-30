@@ -88,6 +88,21 @@ fn main() -> std::process::ExitCode {
     if args.iter().any(|a| a == "--generuj") {
         return cli(&args);
     }
+    if let Some(dir) = hodnota(&args, "--demo-data") {
+        let seed = hodnota(&args, "--seed").and_then(|x| x.parse().ok()).unwrap_or(1);
+        return match rozvrhovnik::demo::zapis(Path::new(&dir), seed) {
+            Ok(soubory) => {
+                for s in soubory {
+                    println!("Zapsáno {s}");
+                }
+                std::process::ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("{}", include_str!("napoveda.txt"));
         return std::process::ExitCode::SUCCESS;
