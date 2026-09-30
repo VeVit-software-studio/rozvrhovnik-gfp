@@ -3,8 +3,8 @@
 **Kompletní dokumentace projektu** – konsoliduje celou konverzaci (zadání, analýzu, architekturu,
 všechny verze programu, otevřené otázky a plán do budoucna) a popisuje aplikaci v tomto repozitáři.
 
-- Verze dokumentu: 1.1
-- Stav aplikace: Rust desktop v0.4 – **implementováno v tomto repozitáři** (viz kap. 4 – Verze)
+- Verze dokumentu: 1.2
+- Stav aplikace: Rust desktop v0.5 – **implementováno v tomto repozitáři** (viz kap. 4 – Verze)
 - Autor konzultací: AI asistent; zadavatel: vyučující GFP
 
 **Rychlý start:** `cargo run --release` (GUI) nebo
@@ -245,9 +245,25 @@ ušetří jen ~0–2 sloty/třídu, problém neřeší.*
 | v0.1 | Python + OR-Tools (CP-SAT) | referenční model omezení, diagnostika slotů, auto-uvolnění, HTML export | jen v konverzaci (není v repozitáři) |
 | v0.2 | Rust + egui desktop | datový model, solver (greedy + annealing), průvodce „Vytvořit nový rok“ (noví žáci 15:15, změny, volitelná), P5 pravidlo 7 h, učební plán/číselníky/nastavení | v0.4 v repozitáři |
 | v0.3 | Rust + `validation.rs` | interaktivní úpravy rozvrhu (klik ➡, Ctrl+Z), okamžitá validace, režim „student“, export CSV/XML | v0.4 v repozitáři |
-| v0.4 | Rust | **L/S střídavé týdny, 📌 piny, kapacity+✂ rozdělení skupin, osobní rozvrhy žáků, zátěže učitelů, tisk celé školy, slepování bloků + semináře dopoledne, 15:15 dle pohlaví** + režim příkazové řádky, váhy v Nastavení, volno učitelů, testy | **tento repozitář** |
+| v0.4 | Rust | **L/S střídavé týdny, 📌 piny, kapacity+✂ rozdělení skupin, osobní rozvrhy žáků, zátěže učitelů, tisk celé školy, slepování bloků + semináře dopoledne, 15:15 dle pohlaví** + režim příkazové řádky, váhy v Nastavení, volno učitelů, profily učitelů a předmětů, import/export žáků, testy | v0.5 v repozitáři |
+| v0.5 | Rust | **požadavky školy z 9/2026**: import DBF a aliasy tříd (7.A, 3.A), pohlaví z rodného čísla, **import rozdělení do seminářů** (výstup školního nástroje), **⊞ Bloky seminářů** (které semináře mohou běžet proti sobě), učitelé po hodinách (NJ: 2 h UHR + 1 h KOŠ), **TV a PL ne v jeden den**, krátké dny a dlouhá okna, **🍴 jídelna** (rozložení obědů), demo data | **tento repozitář** |
 
-Aplikace v repozitáři je nová, ucelená implementace funkcí v0.2–v0.4 (inventář viz kap. 15).
+Aplikace v repozitáři je nová, ucelená implementace funkcí v0.2–v0.5 (inventář viz kap. 15).
+
+### 4.1 Požadavky školy (9/2026) a jak jsou vyřešené
+
+| Požadavek | Řešení |
+|---|---|
+| Data z MS SQL / Bakalářů jako Excel, txt, csv, DBF | import žáků ze všech těchto formátů (kap. 10.1); DBF (dBase III) i s kódováním CP852 / Windows-1250 |
+| Třídy se v exportech jmenují 7.B, 3.A … | **alias třídy** (Číselníky ➡ Třídy, sloupec „Alias (import)“); výchozí 5.A–8.B a 1.A–4.A |
+| Pohlaví podle rodného čísla | sloupec „Rodné číslo“ se použije jen pro pohlaví (měsíc +50 = dívka), neukládá se |
+| AJa/AJb se dělí ručně | ruční sloupec AJ v importu i v tabulce žáků (15:15 jen jako návrh) |
+| Studenti volí semináře „jak je napadne“, ředitel skládá bloky | import souboru `Ročník;Seminář;Mezitřídní;Třídy;Počet žáků;Jméno žáka;Třída žáka` (kap. 8.5) ➡ záložka **⊞ Bloky**: nejmenší počet bloků, které semináře mohou být proti sobě, co brání menšímu počtu bloků (kap. 8.5a) |
+| Jazyky mezitřídně i po třídách, NJ 1 h UHR + 1 h KOŠ, ŠJ část MAN, část NEŠ | menu voleb přes více tříd, ✂ rozdělení skupiny k jinému učiteli, **učitelé po hodinách** u volby |
+| Malí nemají odpoledne | limity P1 (prima–tercie 0 odpoledních, auto-uvolnění hlásí výjimky) |
+| **TV a PL ne v jeden den** | tvrdé pravidlo „předměty, které nesmí být ve stejný den“ (Nastavení, výchozí TV × PL) |
+| Nikdo nemá chodit na jednu hodinu ani čekat 5 hodin | penalizace dne s 1–2 hodinami a oken delších než 2 h; varování v Reportu |
+| Jídelna – všichni v 11:40 | vlny obědů 11:40 / 12:45 / 13:40 / 14:30, kapacita vlny v Nastavení, řešič rozkládá příchody, tabulka v Reportu (kap. 7.3a) |
 
 ---
 
@@ -255,8 +271,8 @@ Aplikace v repozitáři je nová, ucelená implementace funkcí v0.2–v0.4 (inv
 
 ```
 ┌───────────────────────────── aplikace (eframe/egui) ─────────────────────┐
-│  hlavní panel: Rozvrh | Studenti | Volitelné | Plán | Učitelé | Předměty │
-│                | Číselníky | Nastavení | Report + „✚ Vytvořit nový rok…“ │
+│  hlavní panel: Rozvrh | Studenti | Volitelné | ⊞ Bloky | Plán | Učitelé  │
+│     | Předměty | Číselníky | Nastavení | Report + „✚ Vytvořit nový rok…“ │
 │  průvodce (Window): 0 rok → 1 noví žáci → 2 změny → 3 volitelné → 4 fin. │
 ├─────────────────────────────── data (JSON) ──────────────────────────────┤
 │  skola_data.json: { skola, rok, historie[], piny{}, rozvrh }  (autosave) │
@@ -297,7 +313,11 @@ Aplikace v repozitáři je nová, ucelená implementace funkcí v0.2–v0.4 (inv
     - `Stridave { l: Pol, s: Pol }` – L/S celou třídou
     - `StridaveSkupiny { a: [Pol;2], b: [Pol;2] }` – L/S per AJa/AJb
     - `Pol { predmet, ucitel }`
-- `Nastaveni { casovy_limit_s, limity_za_den, odpoledne_od, auto_uvolneni, seed, vahy }`
+- `Nastaveni { casovy_limit_s, limity_za_den, odpoledne_od, auto_uvolneni, seed, vahy, neslucitelne[(A, B)],
+  obedova_pauza, jidelna_kapacita, jidelna_podil }` – chybějící položky ve starých souborech dostanou výchozí hodnoty
+- `Trida.alias` – jiné názvy třídy pro import (např. „7.A, septima A“)
+- `Volba { id, nazev, predmet, ucitel, kapacita, blok, ucitele_hodin[] }` – `blok` = blok seminářů (volby
+  jednoho bloku běží paralelně), `ucitele_hodin` = učitel pro 1., 2., … hodinu týdně (prázdné = `ucitel`)
 
 ### 6.2 `SkolniRok` (roční data)
 
@@ -363,6 +383,8 @@ semináře dají rozvrhnout bez překryvů (realistická struktura „seminárn�
 - **pravidlo 7 hodin** – přesně per žák;
 - max 8 hodin žáka/den; max 2 h stejného předmětu+skupiny/den;
 - limity P1 (po auto-uvolnění; za den nebo za týden); max h učitele/den;
+- **neslučitelné předměty ve stejný den** – pro každého žáka (výchozí TV × PL, další dvojice
+  v Nastavení); řešič počítá per profil žáků a den;
 - lekce bez vhodné místnosti (kontroluje validace po přiřazení místností).
 
 ### 7.3 Měkká kritéria (penalizace, nastavitelné v Nastavení)
@@ -376,6 +398,12 @@ semináře dají rozvrhnout bez překryvů (realistická struktura „seminárn�
 | stejný předmět 2× za den (nesouvisle = víc) | 2 |
 | okno učitele | 1 |
 | hodina **preferované třídy učitele** v 7:20 / odpoledne | 3 |
+| **den žáka s 1–2 hodinami** (×2 pro jedinou hodinu) | 6 |
+| **dlouhé okno** – každá hodina okna nad 2 h (navíc k oknu) | 4 |
+| **jídelna** – strávník nad kapacitu vlny obědů | 2 |
+
+Jedna volná hodina v poledne před odpoledním vyučováním je **pauza na oběd** a nepočítá se
+jako okno (lze vypnout v Nastavení).
 
 Penalizace žáků se násobí počtem žáků profilu, penalizace učitele (okna, preferované třídy)
 měřítkem 5; tvrdé porušení má váhu 50 000.
@@ -388,6 +416,17 @@ váha `ucitel_preference`. Brzké/pozdní hodiny učitele tak přednostně dosta
 nepreferované třídy. Učitelé bez preferencí nemají žádnou režii ani efekt.
 Ověřeno testem `tests/preference_ucitele.rs` (2 třídy, 1 učitel, 30 h): brzké/odpolední hodiny
 preferované třídy 0 (nepreferované 6), bez preference 2 / 4.
+
+### 7.3a Jídelna
+
+Žák jde na oběd po první hodině od 11:40 dál, po které má volno (konec vyučování nebo volná
+hodina): vlny **11:40** (po 5. hodině), **12:45**, **13:40**, **14:30**. Kdo má vyučování v kuse
+až do 14:30, stihne oběd jen o přestávce v 11:40 (počítá se do vlny 11:40, v Reportu „Bez pauzy“).
+Odhad strávníků vlny = žáci × „obědvá % žáků“ (výchozí 70 %). Řešič penalizuje každého strávníka
+nad **kapacitu vlny** (výchozí 120, 0 = nehlídat) – posouvá tak konce vyučování a polední pauzy
+tříd, aby nepřišli všichni najednou. Zatížení se udržuje inkrementálně (vlna profilu × den).
+Na seed datech: bez hlídání nejvytíženější vlna 168 strávníků, s kapacitou 120 nejvýše 118,
+stále 0 tvrdých problémů. Skutečnou kapacitu a podíl strávníků je třeba nastavit podle jídelny.
 
 ### 7.4 Algoritmus
 
@@ -418,7 +457,8 @@ preferované třídy 0 (nepreferované 6), bez preference 2 / 4.
 Varování (auto-uvolnění, prázdné skupiny, nekompletní volby, neaplikované
 piny, kapacity) + problémy (kolize, 7 h, překročené limity, maxima dnů,
 přesná kontrola per student) + statistiky tříd (hodiny, dny s 7:20, odpolední hodiny,
-nejdelší blok, průměrná okna).
+nejdelší blok, průměrná okna) + krátké dny a dlouhá okna (třída, den, počet žáků)
++ 🍴 jídelna (strávníci po vlnách a dnech, přes kapacitu červeně; kdy chodí třídy na oběd).
 
 ---
 
@@ -484,6 +524,43 @@ Menu selector (+ nové / ✖ smazat) → vlastnosti menu (název, h/týden, 2h b
 → obsazenost a validace („X žáků nemá kompletní volby“).
 Tlačítka: ⬇ Katalog / ⬇ Volby z minulého roku (je-li historie), 📝 Doplnit chybějící.
 
+**Učitelé po hodinách**: u volby s více hodinami týdně „po hodinách“ ➡ učitel pro 1., 2., 3. hodinu
+(např. NJ: 1. a 2. hodina UHR, 3. hodina KOŠ). U menu s dvouhodinovými bloky platí pro celý blok.
+Úvazky, profily učitelů i řešič počítají s rozdělením.
+
+**⬆ Import skupin…** (lišta nad menu; soubor lze i přetáhnout do okna na této obrazovce) – načte
+rozdělení žáků do seminářů/skupin ve formátu školního nástroje:
+
+```
+Ročník;Seminář;Mezitřídní;Třídy;Počet žáků;Jméno žáka;Třída žáka
+Septima + třeťák;SBI1;;7.B;16;Novák Jan;7.B
+;;;;;Dvořáková Eva;7.B
+```
+
+(csv, txt, Excel, DBF; řádek s kódem semináře začíná skupinu, další řádky jen se jménem do ní patří;
+jména „Příjmení Jméno“ i „Jméno Příjmení“; třída podle aliasu; volitelný sloupec **Blok**; stejný kód na
+více místech se sloučí). Náhled ukáže skupiny, počty (a nesouhlas s „Počet žáků“), menu se navrhne
+podle tříd. Soubor je **rozhodující**: nové semináře se přidají do katalogu (předmět podle kódu – SBI1 ➡
+SBI, jinak se založí; učitel ze sesterské volby nebo ze souboru), volby žáků tříd menu se nahradí.
+Možnosti: přidat žáky, kteří v seznamu chybí; odebrat z menu volby, které v souboru nejsou.
+
+### 8.5a Bloky seminářů (⊞ Bloky)
+
+Odpověď na otázku „jak udělat bloky seminářů proti sobě / který blok může obsahovat jaké předměty“:
+- **graf kolizí** – dva semináře nemohou být ve stejném bloku, když mají společného žáka, stejného
+  učitele (i u jednotlivých hodin) nebo oba jen tutéž odbornou učebnu; matice kolizí s důvody;
+- **🔀 Navrhnout bloky** – nejmenší počet bloků (dolní mez = největší skupina navzájem kolidujících
+  seminářů, DSatur + přesné obarvení s časovým limitem), vyrovnané velikosti; ručně přiřazené bloky
+  se zachovají; **Doplnit nepřiřazené**, **✖ Zrušit bloky**;
+- ruční přesun semináře do bloku (u každého bloku ✔ / počet kolizí), „Kam může“ s důvody;
+- upozornění, když se bloky nevejdou do týdne (hodiny třídy + bloky > 40 h);
+- **Kdo brání menšímu počtu bloků** – kolize, které způsobuje jen 1–2 žáků, a tlačítko „Najít žáky…“:
+  pořadí žáků, po jejichž změně jedné volby klesne počet bloků (např. 6 ➡ 4 po změně 22 žáků);
+- **⬇ Export (CSV)** – `Blok;Seminář;Název;Učitel;Třídy;Počet žáků;Jméno žáka;Třída žáka`, jde znovu
+  načíst importem skupin.
+
+Řešič pak plánuje semináře jednoho bloku **paralelně** (jedna jednotka), bloky jako celky.
+
 ### 8.6 Učební plán
 
 Per třída: předmět, hodin, 2h blok, rozdělení (celá třída / AJa-AJb /
@@ -527,14 +604,15 @@ kmenová), Učitelé (jméno, max h/den, preferovaná učebna, **📅 volno – 
 
 Časový limit solveru (logaritmický posuvník), semínko varianty (🎲), limity za den /
 za týden, začátek odpoledne, auto-uvolnění, přehled pravidla 7 h, **váhy měkkých
-kritérií** (posuvníky, vč. „preferovaná třída učitele“), limity tříd (přepis raných / odpoledních; odškrtnuto = ∞),
-následníci tříd.
+kritérií** (posuvníky, vč. „preferovaná třída učitele“, krátký den, dlouhé okno, jídelna), polední pauza,
+**předměty, které nesmí být ve stejný den** (dvojice, výchozí TV × PL), **🍴 jídelna** (kapacita vlny,
+% strávníků), limity tříd (přepis raných / odpoledních; odškrtnuto = ∞), následníci tříd.
 
 ### 8.11 Report
 
 **Zátěže učitelů** (vždy – i před generováním; semafor ≥26 oranžová, ≥31
 červená), varování, problémy, statistiky tříd (hodiny, 7:20 dny, odpolední,
-nejdelší blok, okna).
+nejdelší blok, okna), **🍴 jídelna** (kap. 7.3a).
 
 ---
 
@@ -552,6 +630,9 @@ cargo run --release -- --generuj --cas 60 --export export
 cargo run --release -- --help
 
 cargo test --release                 # testy logiky (řešič na seed datech ~30 s)
+
+# Demo data se smyšlenými jmény (seznam žáků, semináře ve formátu školy, projekt, Excel)
+cargo run --release -- --demo-data demo [--seed 7]
 ```
 
 - Data se ukládají do `skola_data.json` (automaticky při zavření, 💾 kdykoliv).
@@ -596,6 +677,10 @@ a `.json`.
 | **Třída** | id nebo název, bez ohledu na velikost písmen, mezery, tečky a diakritiku (`kvartaA`, `Kvarta A`, `1.A`, `první A`) |
 | **Oddělovač** | `;` `,` nebo tabulátor – odhadne se |
 | **Kódování** | UTF-8 (s BOM i bez), UTF-16 s BOM a **Windows-1250** (český Excel „CSV“) – při jiném než UTF-8 upozornění |
+| **DBF** | dBase III (FoxPro/Bakaláři), smazané záznamy se vynechají; kódování podle hlavičky (CP852, Windows-1250), jinak se odhadne a ohlásí |
+| **Alias třídy** | `7.A`, `3.A` … podle sloupce „Alias (import)“ v Číselníky ➡ Třídy; neznámá nebo nejednoznačná třída se ohlásí s radou |
+| **Rodné číslo** | sloupec „Rodné číslo“ / „RČ“ ➡ pohlaví (měsíc 51–62 / 71–82 = dívka); samotné RČ se neukládá. Sloupec Pohlaví má přednost |
+| **Jméno** | „Jméno Příjmení“ i „Příjmení Jméno“ – při aktualizaci se žák najde bez ohledu na pořadí |
 | **Pohlaví** | `D`, `Ž`, `dívka`, `F` ➡ D; `CH`, `M`, `chlapec` ➡ CH; chybí-li, odhad ze jména |
 | **Stav** | aktivní / propadá / odešel |
 | **Volby** | `menu=V1,V2\|menu2=V3` (menu oddělená svislítkem, id nebo názvy); ověřují se proti katalogům (menu se musí týkat třídy žáka, počet voleb) |
@@ -638,6 +723,10 @@ do repozitáře.
 ## 11. Stav
 
 ### Hotovo
+✔ **v0.5**: import DBF, aliasy tříd, pohlaví z RČ, import rozdělení do seminářů, ⊞ bloky seminářů
+(návrh, kontrola, kdo brání menšímu počtu bloků, export), paralelní plánování bloků, učitelé po hodinách,
+TV × PL ne v jeden den, krátké dny a dlouhá okna, polední pauza, 🍴 jídelna, demo data.
+
 ✔ P1–P5 (s auto-uvolněním), L/S střídavé týdny, piny, kapacity+rozdělení
 skupin, osobní rozvrhy, zátěže učitelů, tisk (třídy, učitelé, žáci), slepování bloků,
 semináře dopoledne, 15:15 dle pohlaví, editace+undo+validace, průvodce novým rokem,
@@ -667,7 +756,8 @@ bez oken ve všech třídách, úvazky nejvýše 21 h; limit 30 s.
 2. Limity kvarty/kvinty – **za den, nebo za týden**?
 3. 4leté třídy – první A ≈ kvinta (schváleno?), čtvrtá A existuje? Mají mít 2. jazyk
    odděleně (4 h), nebo se míchat s 8letými?
-4. **Semináře**: pošlete čísla voleb studentů → přesné plánování bez překryvů.
+4. ~~**Semináře**: pošlete čísla voleb studentů~~ ✔ import výstupu nástroje na semináře + ⊞ Bloky.
+   Pošlete skutečný soubor pro kontrolu formátu.
 5. Potvrzení L/S interpretace (předpoklad: lichý/sudý týden).
 6. **Velikosti tříd a skupin** (kapacity MJP 14, PAJ/PFJ 17!).
 7. Jména učitelů (doplnit ze seznamu zaměstnanců) a jejich skutečné přiřazení k hodinám.
@@ -675,6 +765,9 @@ bez oken ve všech třídách, úvazky nejvýše 21 h; limit 30 s.
 9. Vzorový soubor Bakalářů pro importní konvertor.
 10. Dny, kdy jednotliví učitelé neučí (částečné úvazky) – lze zadat v Číselníky → Učitelé → 📅.
 11. Je kvarta B dobíhající třída (škola přešla z 2 na 1 třídu v 8letém studiu)?
+12. **Jídelna**: kolik strávníků zvládne jedna vlna (cca 20–30 min) a kolik % žáků obědvá? Otevírá
+    jídelna před 11:40? Sdílí ji jiná škola (pevné časy)?
+13. Další dvojice předmětů, které nesmí být ve stejný den (kromě TV × PL)?
 
 ---
 
@@ -727,7 +820,7 @@ vyrovnání týdenní zátěže učitelů, oktávová AJ ve 4 skupinách napří
 
 ## 15. Inventář zdrojových souborů
 
-### Rust aplikace (v0.4)
+### Rust aplikace (v0.5)
 
 | Soubor | Obsah |
 |---|---|
@@ -740,13 +833,22 @@ vyrovnání týdenní zátěže učitelů, oktávová AJ ve 4 skupinách napří
 | `src/solver.rs` | LekceInfo/Vysledek, postav_lekce, model (profily, konflikty, bazény místností), generuj (greedy + žíhání + slep_bloky), piny, L/S, auto-uvolnění, místnosti, zátěže |
 | `src/validation.rs` | zkontroluj() – plná validace per žák a týden + statistiky tříd |
 | `src/export.rs` | HTML tisk (třídy, učitelé, žáci), CSV, XML, textový report |
-| `src/studenti_io.rs` | import (txt, csv, xlsx/xls/ods, json) a export (csv, json, xlsx, txt) seznamu žáků, plán a aplikace importu (režimy) |
+| `src/studenti_io.rs` | import (txt, csv, xlsx/xls/ods, json, dbf) a export (csv, json, xlsx, txt) seznamu žáků, aliasy tříd, pohlaví z RČ, plán a aplikace importu (režimy) |
 | `src/app/import_ui.rs` | GUI importu/exportu žáků: lišta, náhled, výběr souboru, přetažení, načtení do průvodce |
 | `src/profily.rs` | odvozená data profilů: kdo co učí, ve kterých třídách, kolik hodin (plán + volby) |
-| `src/app.rs` | UI (obrazovky vč. profilů učitelů a předmětů, průvodce, editace, exporty, piny, zátěže, rozdělení skupin) |
+| `src/app.rs` | UI (obrazovky vč. profilů učitelů a předmětů, průvodce, editace, exporty, piny, zátěže, rozdělení skupin, jídelna v Reportu) |
+| `src/skupiny_io.rs` | import rozdělení do seminářů/skupin (formát školního nástroje), přenos do menu voleb |
+| `src/bloky.rs` | bloky seminářů: graf kolizí, klika, DSatur, přesné obarvení, vyrovnání, kdo brání, export CSV |
+| `src/jidelna.rs` | vlny obědů, polední pauza, zatížení jídelny v hotovém rozvrhu |
+| `src/demo.rs` | demo data se smyšlenými jmény (`--demo-data`) |
+| `src/app/skupiny_ui.rs` | GUI importu skupin a obrazovka ⊞ Bloky |
 | `tests/zakladni.rs` | testy: 15:15, odhad pohlaví, seed, přechod roku, volby, validace, řešič, piny, uložení, profily |
 | `tests/studenti_io.rs` | testy importu/exportu žáků: parsování, kódování, Excel, režimy, zpětný import všech formátů |
 | `tests/preference_ucitele.rs` | preferované třídy učitele v řešiči, zpětná kompatibilita JSON |
+| `tests/skupiny_io.rs` | import skupin: formát nástroje, slučování, přenos do menu, chybějící žáci a třídy |
+| `tests/bloky.rs` | bloky seminářů: kolize, nejmenší počet bloků, kontrola, paralelní plánování, export ➡ import, učitelé po hodinách, kdo brání |
+| `tests/pravidla.rs` | TV × PL, vlny obědů a polední pauza, jídelna v řešiči, krátké dny a dlouhá okna, profily s učiteli po hodinách |
+| `tests/data/*.dbf` | malé DBF soubory se smyšlenými jmény (CP852, Windows-1250) |
 | `docs/superpowers/specs/` | návrhy funkcí (profily učitelů a předmětů) |
 
 ---
