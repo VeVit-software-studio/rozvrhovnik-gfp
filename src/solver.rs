@@ -7,6 +7,7 @@
 //! hodin mají stejný rozvrh), takže pravidlo 7 hodin, limity P1 i okna platí per žák.
 
 use crate::data::*;
+use crate::jidelna;
 use crate::validation;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,8 @@ const H: i64 = 50_000;
 /// Měřítko měkkých penalizací učitele (okna, preferované třídy) vůči penalizacím žáků,
 /// které se násobí počtem žáků profilu.
 const MERITKO_UCITELE: i64 = 5;
+/// Nejvýše tolik dvojic neslučitelných předmětů (TV × PL…) řešič hlídá.
+const MAX_PRAVIDEL: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Tyden {
@@ -534,6 +537,14 @@ struct Model {
     vahy: Vahy,
     strukturalni: i64,
     limity: BTreeMap<String, Omezeni>,
+    /// Neslučitelné předměty: pro jednotku (profil, strana pravidla); strana = 2 × pravidlo + 0/1.
+    uprav: Vec<Vec<(u32, u8)>>,
+    n_prav: usize,
+    /// Polední pauza se nepočítá jako okno.
+    pauza: bool,
+    /// Jídelna: kapacita jedné vlny × 100 (0 = nehlídat) a podíl strávníků v %.
+    jid_kap100: i64,
+    jid_podil: i64,
 }
 
 impl Model {
@@ -562,6 +573,7 @@ impl Model {
 
         // profily
         let mut profily: HashMap<Vec<u32>, usize> = HashMap::new();
+        let mut zak_prof: HashMap<u32, usize> = HashMap::new();
         let mut prof_units: Vec<Vec<u32>> = Vec::new();
         let mut prof_trida: Vec<String> = Vec::new();
         let mut prof_size: Vec<i64> = Vec::new();
@@ -579,6 +591,7 @@ impl Model {
                 prof_units.len() - 1
             });
             prof_size[p] += 1;
+            zak_prof.insert(*z, p);
         }
 
         // limity P1 + auto-uvolnění
@@ -642,6 +655,33 @@ impl Model {
         for (p, us) in prof_units.iter().enumerate() {
             for &u in us {
                 uprof[u as usize].push(p as u32);
+            }
+        }
+
+        // neslučitelné předměty ve stejný den (TV × PL): strany pravidel pro (jednotku, profil)
+        let pravidla: Vec<&(String, String)> = nast
+            .neslucitelne
+            .iter()
+            .filter(|(a, b)| !a.is_empty() && !b.is_empty() && a != b)
+            .take(MAX_PRAVIDEL)
+            .collect();
+        let mut uprav: Vec<Vec<(u32, u8)>> = vec![vec![]; n_u];
+        if !pravidla.is_empty() {
+            for (z, ls) in &zak_lekce {
+                let Some(&p) = zak_prof.get(z) else { continue };
+                for &i in ls {
+                    for (r, (a, b)) in pravidla.iter().enumerate() {
+                        for (strana, pr) in [(0, a), (1, b)] {
+                            if lekce[i].predmet == *pr {
+                                let x = (p as u32, (2 * r + strana) as u8);
+                                let u = lekce[i].jednotka;
+                                if !uprav[u].contains(&x) {
+                                    uprav[u].push(x);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -837,6 +877,11 @@ impl Model {
             vahy: nast.vahy,
             strukturalni: strukt.len() as i64,
             limity,
+            uprav,
+            n_prav: pravidla.len(),
+            pauza: nast.obedova_pauza,
+            jid_kap100: nast.jidelna_kapacita as i64 * 100,
+            jid_podil: nast.jidelna_podil.min(100) as i64,
         }
     }
 }
@@ -854,6 +899,8 @@ struct DenC {
     soft: i64,
     rane: u8,
     odpo: u8,
+    /// Vlna obědů (jidelna::vlna), None = žák ten den ve škole není.
+    vlna: Option<u8>,
 }
 
 struct Stav<'m> {
@@ -870,8 +917,28 @@ struct Stav<'m> {
     prof_week: Vec<i64>,
     teach_day: Vec<[(i64, i64); DNY]>,
     key_day: Vec<[(i64, i64); DNY]>,
+    /// Počet jednotek profilu se stranou pravidla neslučitelných předmětů za den.
+    prof_prav: Vec<[[u8; 2 * MAX_PRAVIDEL]; DNY]>,
+    /// Žáci v jednotlivých vlnách obědů (den, vlna).
+    jid: [[i64; jidelna::VLNY]; DNY],
     hard: i64,
     soft: i64,
+}
+
+/// Součet délek oken nad 2 hodiny (okno 3 h ➡ 1, okno 5 h ➡ 3).
+fn dlouha_okna(den: &[bool]) -> i64 {
+    let (Some(f), Some(l)) = (den.iter().position(|&x| x), den.iter().rposition(|&x| x)) else { return 0 };
+    let mut navic = 0;
+    let mut dira: usize = 0;
+    for &x in &den[f..=l] {
+        if x {
+            navic += dira.saturating_sub(2);
+            dira = 0;
+        } else {
+            dira += 1;
+        }
+    }
+    navic as i64
 }
 
 fn beh_a_okna(occ: &[u8]) -> (usize, usize, usize, usize) {
@@ -916,6 +983,8 @@ impl<'m> Stav<'m> {
             prof_week: vec![0; m.prof.len()],
             teach_day: vec![[(0, 0); DNY]; m.teach_max.len()],
             key_day: vec![[(0, 0); DNY]; m.key_len.len()],
+            prof_prav: vec![[[0; 2 * MAX_PRAVIDEL]; DNY]; m.prof.len()],
+            jid: [[0; jidelna::VLNY]; DNY],
             hard: m.strukturalni,
             soft: 0,
         }
@@ -941,9 +1010,40 @@ impl<'m> Stav<'m> {
                 hard += odpo.saturating_sub(l) as i64;
             }
         }
+        // neslučitelné předměty (TV × PL) ve stejný den
+        let pr = &self.prof_prav[p][d];
+        for r in 0..m.n_prav {
+            if pr[2 * r] > 0 && pr[2 * r + 1] > 0 {
+                hard += 1;
+            }
+        }
+        let mut den = [false; SLOTU];
+        for k in 0..SLOTU {
+            den[k] = occ[k] > 0;
+        }
+        let mut okna = okna as i64;
+        if m.pauza && jidelna::obedova_pauza(&den).is_some() {
+            okna -= 1;
+        }
+        // den s 1–2 hodinami („jít do školy na jednu hodinu“) a dlouhá okna
+        let kratky = if n > 0 && n < 3 { (3 - n) as i64 } else { 0 };
         let v = &m.vahy;
-        let soft = (v.okno as i64 * okna as i64 + v.rana as i64 * rane as i64 + info.w_odpo * odpo as i64) * info.size;
-        DenC { hard, soft, rane, odpo }
+        let soft = (v.okno as i64 * okna
+            + v.rana as i64 * rane as i64
+            + info.w_odpo * odpo as i64
+            + v.kratky_den as i64 * kratky
+            + v.dlouhe_okno as i64 * dlouha_okna(&den))
+            * info.size;
+        DenC { hard, soft, rane, odpo, vlna: jidelna::vlna(&den).map(|w| w as u8) }
+    }
+
+    /// Penalizace jídelny za den: strávníci nad kapacitu v každé vlně.
+    fn jidelna_den(&self, d: usize) -> i64 {
+        let m = self.m;
+        if m.jid_kap100 == 0 || m.vahy.jidelna == 0 {
+            return 0;
+        }
+        self.jid[d].iter().map(|&z| (z * m.jid_podil - m.jid_kap100).max(0)).sum::<i64>() * m.vahy.jidelna as i64 / 100
     }
 
     fn prof_tyden(&self, p: usize) -> i64 {
@@ -1023,6 +1123,9 @@ impl<'m> Stav<'m> {
                 }
             }
         }
+        for &(p, b) in &m.uprav[u] {
+            self.prof_prav[p as usize][s / SLOTU][b as usize] -= 1;
+        }
         self.soft -= m.uplace[u][s];
     }
 
@@ -1059,6 +1162,9 @@ impl<'m> Stav<'m> {
                 }
             }
         }
+        for &(p, b) in &m.uprav[u] {
+            self.prof_prav[p as usize][s / SLOTU][b as usize] += 1;
+        }
         self.soft += m.uplace[u][s];
     }
 
@@ -1084,12 +1190,17 @@ impl<'m> Stav<'m> {
             }
         }
         let dny = &dny[..nd];
+        let jid0: i64 = dny.iter().map(|&d| self.jidelna_den(d)).sum();
         for &p in &m.uprof[u] {
             let p = p as usize;
             self.hard -= self.prof_week[p];
             for &d in dny {
-                self.hard -= self.prof_day[p][d].hard;
-                self.soft -= self.prof_day[p][d].soft;
+                let c = self.prof_day[p][d];
+                self.hard -= c.hard;
+                self.soft -= c.soft;
+                if let Some(w) = c.vlna {
+                    self.jid[d][w as usize] -= m.prof[p].size;
+                }
             }
         }
         for &t in &m.uteach[u] {
@@ -1120,6 +1231,9 @@ impl<'m> Stav<'m> {
                 self.prof_day[p][d] = c;
                 self.hard += c.hard;
                 self.soft += c.soft;
+                if let Some(w) = c.vlna {
+                    self.jid[d][w as usize] += m.prof[p].size;
+                }
             }
             let w = self.prof_tyden(p);
             self.prof_week[p] = w;
@@ -1141,6 +1255,7 @@ impl<'m> Stav<'m> {
                 self.soft += c.1;
             }
         }
+        self.soft += dny.iter().map(|&d| self.jidelna_den(d)).sum::<i64>() - jid0;
         (self.hard - h0) * H + (self.soft - s0)
     }
 
@@ -1487,7 +1602,9 @@ pub fn zkontroluj_a_zapis(skola: &Skola, v: &mut Vysledek) {
     let k = validation::zkontroluj(skola, v);
     v.problemy = k.problemy;
     v.problemove_lekce = k.problemove_lekce.into_iter().collect();
-    v.varovani.retain(|x| !x.starts_with("Kapacita:") && !x.starts_with("Místnost:") && !x.starts_with("Bez učitele:"));
+    v.varovani.retain(|x| {
+        !["Kapacita:", "Místnost:", "Bez učitele:", "Krátký den", "Dlouhé okno"].iter().any(|p| x.starts_with(p))
+    });
     v.varovani.extend(k.varovani);
 }
 

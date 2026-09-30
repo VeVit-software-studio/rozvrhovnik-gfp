@@ -10,6 +10,7 @@ mod skupiny_ui;
 
 use rozvrhovnik::data::*;
 use rozvrhovnik::export::{self, Pohled};
+use rozvrhovnik::jidelna;
 use rozvrhovnik::profily::{self, Vyuka};
 use rozvrhovnik::rok::{self, NovyZak, Zmena};
 use rozvrhovnik::solver::{self, Prubeh, Vysledek};
@@ -1521,7 +1522,7 @@ impl RozvrhApp {
     // ───────────── obrazovka Nastavení ─────────────
 
     fn obrazovka_nastaveni(&mut self, ui: &mut Ui) {
-        let Skola { tridy, nastaveni: n, .. } = &mut self.p.skola;
+        let Skola { tridy, predmety, nastaveni: n, .. } = &mut self.p.skola;
         egui::ScrollArea::vertical().id_source("na-sc").auto_shrink([false, false]).show(ui, |ui| {
             ui.heading("Řešič");
             ui.add(egui::Slider::new(&mut n.casovy_limit_s, 5..=600).logarithmic(true).text("s časový limit"));
@@ -1566,9 +1567,69 @@ impl RozvrhApp {
                 egui::Slider::new(&mut v.ucitel_preference, 0..=20)
                     .text("preferovaná třída učitele (její hodina v 7:20 / odpoledne)"),
             );
+            ui.add(
+                egui::Slider::new(&mut v.kratky_den, 0..=20)
+                    .text("den žáka s 1–2 hodinami (nechodit do školy na jednu hodinu)"),
+            );
+            ui.add(egui::Slider::new(&mut v.dlouhe_okno, 0..=20).text("dlouhé okno – každá hodina nad 2 h"));
+            ui.add(egui::Slider::new(&mut v.jidelna, 0..=20).text("jídelna – strávník nad kapacitu vlny"));
             if ui.button("Obnovit výchozí váhy").clicked() {
                 *v = Vahy::default();
             }
+            ui.checkbox(
+                &mut n.obedova_pauza,
+                "Volná hodina v poledne (po 11:40, před odpoledním vyučováním) je pauza na oběd, ne okno",
+            );
+            ui.separator();
+            ui.heading("Předměty, které nesmí být ve stejný den");
+            ui.label(
+                RichText::new("Tvrdé pravidlo pro každého žáka (např. TV a plavání). Hlídá se při generování i v Reportu.")
+                    .weak(),
+            );
+            let mut smazat = None;
+            let nazev = |id: &str| predmety.iter().find(|p| p.id == id).map_or(id.to_string(), |p| format!("{} – {}", p.id, p.nazev));
+            for (k, (a, b)) in n.neslucitelne.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    for (strana, x) in [(0, &mut *a), (1, &mut *b)] {
+                        egui::ComboBox::from_id_source(("na-nes", k, strana))
+                            .selected_text(nazev(x))
+                            .width(220.0)
+                            .show_ui(ui, |ui| {
+                                for p in predmety.iter() {
+                                    ui.selectable_value(x, p.id.clone(), format!("{} – {}", p.id, p.nazev));
+                                }
+                            });
+                        if strana == 0 {
+                            ui.label("×");
+                        }
+                    }
+                    if ui.button("✖").on_hover_text("Odebrat pravidlo").clicked() {
+                        smazat = Some(k);
+                    }
+                });
+            }
+            if let Some(k) = smazat {
+                n.neslucitelne.remove(k);
+            }
+            if ui.button("➕ Přidat dvojici").clicked() {
+                n.neslucitelne.push(("TV".into(), "PL".into()));
+            }
+            ui.separator();
+            ui.heading("🍴 Jídelna");
+            ui.label(
+                RichText::new(
+                    "Žák jde na oběd po první hodině od 11:40, po které má volno (konec vyučování nebo volná hodina). \
+                     Řešič rozkládá příchody do vln 11:40 / 12:45 / 13:40 / 14:30, aby žádná nepřekročila kapacitu. \
+                     Obsazenost vln je v Reportu.",
+                )
+                .weak(),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Kapacita jedné vlny (strávníků, 0 = nehlídat):");
+                ui.add(egui::DragValue::new(&mut n.jidelna_kapacita).clamp_range(0..=2000));
+                ui.label("Obědvá % žáků:");
+                ui.add(egui::DragValue::new(&mut n.jidelna_podil).clamp_range(0..=100).suffix(" %"));
+            });
             ui.separator();
             ui.heading("Limity tříd");
             egui::Grid::new("na-limity").striped(true).show(ui, |ui| {
@@ -1699,6 +1760,8 @@ impl RozvrhApp {
                         }
                     });
                 }
+                ui.separator();
+                report_jidelny(ui, skola, v);
             });
         });
     }
@@ -2202,6 +2265,7 @@ fn editor_voleb(
         ui.separator();
         ui.label(RichText::new("Katalog voleb").strong());
         let mut smazat = None;
+        let casti = solver::rozpis(m.hodin_tydne, m.dvojhodina);
         egui::Grid::new((salt, "katalog")).striped(true).show(ui, |ui| {
             for h in ["ID", "Název", "Předmět", "Učitel", "Žáků", "Kapacita", "", ""] {
                 ui.label(RichText::new(h).strong());
@@ -2211,7 +2275,30 @@ fn editor_voleb(
                 ui.label(&v.id);
                 ui.add_sized([200.0, 20.0], egui::TextEdit::singleline(&mut v.nazev));
                 combo_predmet(ui, (salt, "kp", vi), &skola.predmety, &mut v.predmet);
-                combo_ucitel(ui, (salt, "ku", vi), &skola.ucitele, &mut v.ucitel, 80.0);
+                ui.horizontal(|ui| {
+                    combo_ucitel(ui, (salt, "ku", vi), &skola.ucitele, &mut v.ucitel, 80.0);
+                    if casti.len() > 1 {
+                        let po_hodinach = !v.ucitele_hodin.is_empty();
+                        let tlacitko = egui::SelectableLabel::new(po_hodinach, "po hodinách");
+                        if ui
+                            .add(tlacitko)
+                            .on_hover_text("Různí učitelé pro jednotlivé hodiny (např. NJ: 2 h UHR, 1 h KOŠ)")
+                            .clicked()
+                        {
+                            v.ucitele_hodin =
+                                if po_hodinach { Vec::new() } else { vec![v.ucitel.clone(); casti.len()] };
+                        }
+                        if !v.ucitele_hodin.is_empty() {
+                            v.ucitele_hodin.resize(casti.len(), v.ucitel.clone());
+                            for (k, delka) in casti.iter().enumerate() {
+                                let popis =
+                                    if *delka == 2 { format!("{}. (2 h)", k + 1) } else { format!("{}.", k + 1) };
+                                ui.label(RichText::new(popis).weak());
+                                combo_ucitel(ui, (salt, "kuh", vi, k), &skola.ucitele, &mut v.ucitele_hodin[k], 60.0);
+                            }
+                        }
+                    }
+                });
                 let pocet = obs.get(&v.id).copied().unwrap_or(0);
                 let pres = v.kapacita.is_some_and(|k| pocet > k as usize);
                 let t = RichText::new(pocet.to_string()).strong();
@@ -2474,4 +2561,55 @@ fn otevrit_dialog() -> Option<Option<PathBuf>> {
     {
         None
     }
+}
+
+/// Report: kolik strávníků přijde v jednotlivých vlnách obědů.
+fn report_jidelny(ui: &mut Ui, skola: &Skola, v: &Vysledek) {
+    let j = jidelna::spocitej(skola, v);
+    let n = &skola.nastaveni;
+    ui.label(RichText::new("🍴 Jídelna – příchody na oběd").strong());
+    ui.label(
+        RichText::new(format!(
+            "Odhad strávníků ({} % žáků) podle konce vyučování nebo volné hodiny · kapacita vlny {} (Nastavení)",
+            n.jidelna_podil,
+            if n.jidelna_kapacita == 0 { "nehlídá se".to_string() } else { n.jidelna_kapacita.to_string() }
+        ))
+        .weak()
+        .small(),
+    );
+    egui::Grid::new("re-jid").striped(true).show(ui, |ui| {
+        ui.label(RichText::new("Den").strong());
+        for w in 0..jidelna::VLNY {
+            ui.label(RichText::new(format!("po {}", jidelna::cas_vlny(w))).strong());
+        }
+        ui.label(RichText::new("Bez pauzy").strong())
+            .on_hover_text("Žáci s vyučováním 11:40–14:30 v kuse – na oběd jen o přestávce v 11:40");
+        ui.end_row();
+        for d in 0..DNY {
+            ui.label(NAZVY_DNU[d]);
+            for w in 0..jidelna::VLNY {
+                let t = RichText::new(j.stravniku[d][w].to_string());
+                ui.label(if j.pres_kapacitu(d, w) { t.color(CERVENA).strong() } else { t });
+            }
+            let t = RichText::new(j.bez_pauzy[d].to_string());
+            ui.label(if j.bez_pauzy[d] > 0 { t.color(ORANZOVA) } else { t.weak() });
+            ui.end_row();
+        }
+    });
+    ui.collapsing("Kdy chodí třídy na oběd", |ui| {
+        egui::Grid::new("re-jid-tr").striped(true).show(ui, |ui| {
+            ui.label(RichText::new("Třída").strong());
+            for d in NAZVY_DNU {
+                ui.label(RichText::new(d).strong());
+            }
+            ui.end_row();
+            for (tr, dny) in &j.tridy {
+                ui.label(skola.nazev_tridy(tr));
+                for w in dny {
+                    ui.label(w.map_or("–", jidelna::cas_vlny));
+                }
+                ui.end_row();
+            }
+        });
+    });
 }

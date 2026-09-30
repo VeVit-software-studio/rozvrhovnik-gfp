@@ -132,6 +132,11 @@ pub fn zkontroluj(skola: &Skola, v: &Vysledek) -> Kontrola {
         }
     }
     let mut stat_zaka: BTreeMap<String, Vec<(usize, usize, usize, usize, usize)>> = BTreeMap::new();
+    let pravidla: Vec<&(String, String)> =
+        skola.nastaveni.neslucitelne.iter().filter(|(a, b)| !a.is_empty() && !b.is_empty() && a != b).collect();
+    // (třída, den) ➡ žáci s krátkým dnem / dlouhým oknem
+    let mut kratke: BTreeMap<(String, usize), BTreeSet<u32>> = BTreeMap::new();
+    let mut dlouhe: BTreeMap<(String, usize), BTreeSet<u32>> = BTreeMap::new();
     for (z, tr) in &v.zaci_tridy {
         let lim = v.limity.get(tr).copied().unwrap_or_else(|| skola.trida(tr).map(|t| t.omezeni()).unwrap_or_default());
         let ls = zak_lekce.get(z).cloned().unwrap_or_default();
@@ -141,6 +146,17 @@ pub fn zkontroluj(skola: &Skola, v: &Vysledek) -> Kontrola {
                 for &w in v.lekce[i].tyden.tydny() {
                     for t in s as usize..s as usize + v.lekce[i].len as usize {
                         occ[w][t] = true;
+                    }
+                }
+            }
+        }
+        // předměty žáka po (týden, den) – pro neslučitelné předměty
+        let mut predmety_dne: HashMap<(usize, usize), BTreeSet<&str>> = HashMap::new();
+        if !pravidla.is_empty() {
+            for &i in &ls {
+                if let Some(s) = v.slot[i] {
+                    for &w in v.lekce[i].tyden.tydny() {
+                        predmety_dne.entry((w, s as usize / SLOTU)).or_default().insert(v.lekce[i].predmet.as_str());
                     }
                 }
             }
@@ -171,6 +187,13 @@ pub fn zkontroluj(skola: &Skola, v: &Vysledek) -> Kontrola {
                 }
                 if pocet > MAX_DEN_TRIDA {
                     zapis(format!("více než {} h za den ({} h, {})", MAX_DEN_TRIDA, pocet, tyden_nazev(w)));
+                }
+                if let Some(pr) = predmety_dne.get(&(w, d)) {
+                    for (a, b) in &pravidla {
+                        if pr.contains(a.as_str()) && pr.contains(b.as_str()) {
+                            zapis(format!("{} a {} ve stejný den", a, b));
+                        }
+                    }
                 }
                 if za_den {
                     if lim.rane.is_some_and(|l| rane > l as usize) {
@@ -209,6 +232,19 @@ pub fn zkontroluj(skola: &Skola, v: &Vysledek) -> Kontrola {
             odpo += den[odpo_od..].iter().filter(|&&x| x).count();
             if let (Some(f), Some(l)) = (den.iter().position(|&x| x), den.iter().rposition(|&x| x)) {
                 okna += l - f + 1 - c;
+                // nejdelší okno
+                let mut dira = 0;
+                let mut nejdelsi = 0;
+                for &x in &den[f..=l] {
+                    dira = if x { 0 } else { dira + 1 };
+                    nejdelsi = nejdelsi.max(dira);
+                }
+                if nejdelsi >= 3 {
+                    dlouhe.entry((tr.clone(), d)).or_default().insert(*z);
+                }
+            }
+            if (1..=2).contains(&c) {
+                kratke.entry((tr.clone(), d)).or_default().insert(*z);
             }
         }
         stat_zaka.entry(tr.clone()).or_default().push((hodin, rane_dny, odpo, max_blok, okna));
@@ -226,6 +262,14 @@ pub fn zkontroluj(skola: &Skola, v: &Vysledek) -> Kontrola {
                     }
                 }
             }
+        }
+    }
+
+    for (mapa, co) in [(&kratke, "Krátký den (1–2 h)"), (&dlouhe, "Dlouhé okno (3+ h)")] {
+        for ((tr, d), zaci) in mapa {
+            let zaku = zaci.iter().filter(|z| !v.virtualni_zaci.contains(z)).count();
+            let kdo = if zaku == 0 { "třída".to_string() } else { format!("{} žáků", zaku) };
+            k.varovani.push(format!("{}: {} – {}, {}", co, skola.nazev_tridy(tr), NAZVY_DNU[*d], kdo));
         }
     }
 

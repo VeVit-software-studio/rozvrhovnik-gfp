@@ -194,6 +194,7 @@ pub struct PlanovaHodina {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Vahy {
     pub okno: u32,
     pub rana: u32,
@@ -203,8 +204,13 @@ pub struct Vahy {
     pub rozlozeni: u32,
     pub ucitel_okno: u32,
     /// Penalizace za brzkou/pozdní hodinu preferované třídy učitele.
-    #[serde(default)]
     pub ucitel_preference: u32,
+    /// Den žáka s jedinou hodinou (×2) nebo se dvěma hodinami (×1) – „nechodit do školy na hodinu“.
+    pub kratky_den: u32,
+    /// Dlouhé okno: každá hodina okna nad 2 hodiny navíc (žák nemá „čumět“ 5 hodin).
+    pub dlouhe_okno: u32,
+    /// Jídelna: každý strávník nad kapacitu jedné vlny obědů.
+    pub jidelna: u32,
 }
 
 impl Default for Vahy {
@@ -218,11 +224,15 @@ impl Default for Vahy {
             rozlozeni: 2,
             ucitel_okno: 1,
             ucitel_preference: 3,
+            kratky_den: 6,
+            dlouhe_okno: 4,
+            jidelna: 2,
         }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Nastaveni {
     /// Časový limit řešiče v sekundách.
     pub casovy_limit_s: u32,
@@ -234,8 +244,15 @@ pub struct Nastaveni {
     pub auto_uvolneni: bool,
     /// Semínko náhody – jiné číslo = jiná varianta rozvrhu.
     pub seed: u64,
-    #[serde(default)]
     pub vahy: Vahy,
+    /// Dvojice předmětů, které žák nesmí mít ve stejný den (např. TV a plavání) – tvrdé pravidlo.
+    pub neslucitelne: Vec<(String, String)>,
+    /// Jedna volná hodina v poledne (po 11:40) se nepočítá jako okno – je to pauza na oběd.
+    pub obedova_pauza: bool,
+    /// Jídelna: kolik strávníků zvládne jedna vlna obědů (0 = nehlídat).
+    pub jidelna_kapacita: u32,
+    /// Jídelna: kolik % žáků ve škole obědvá.
+    pub jidelna_podil: u8,
 }
 
 impl Default for Nastaveni {
@@ -247,6 +264,10 @@ impl Default for Nastaveni {
             auto_uvolneni: true,
             seed: 1,
             vahy: Vahy::default(),
+            neslucitelne: vec![("TV".into(), "PL".into())],
+            obedova_pauza: true,
+            jidelna_kapacita: 120,
+            jidelna_podil: 70,
         }
     }
 }

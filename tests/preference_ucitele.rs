@@ -111,5 +111,13 @@ fn stary_json_bez_novych_poli_se_nacte() {
         r#"{"okno":5,"rana":3,"odpoledne_nizsi":1,"odpoledne_vyssi":2,"seminar_odpoledne":2,"rozlozeni":2,"ucitel_okno":1}"#,
     )
     .unwrap();
-    assert_eq!(v.ucitel_preference, 0);
+    // chybějící váhy dostanou výchozí hodnoty
+    assert_eq!(v.ucitel_preference, Vahy::default().ucitel_preference);
+    assert_eq!(v.kratky_den, Vahy::default().kratky_den);
+    let n: Nastaveni = serde_json::from_str(
+        r#"{"casovy_limit_s":30,"limity_za_den":true,"odpoledne_od":6,"auto_uvolneni":true,"seed":1}"#,
+    )
+    .unwrap();
+    assert_eq!(n.neslucitelne, [("TV".to_string(), "PL".to_string())]);
+    assert!(n.obedova_pauza);
 }

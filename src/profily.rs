@@ -3,6 +3,7 @@
 
 use crate::data::*;
 use crate::rok;
+use crate::solver;
 
 /// Jedna položka výuky: učitel × předmět × třída/skupina.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,15 +63,26 @@ pub fn vyuka(skola: &Skola, rok: &SkolniRok) -> Vec<Vyuka> {
     for m in &rok.menu {
         let obs = rok::obsazenost(rok, m);
         for v in &m.volby {
-            out.push(Vyuka {
-                ucitel: v.ucitel.clone(),
-                predmet: v.predmet.clone(),
-                tridy: m.tridy.clone(),
-                skupina: v.nazev.clone(),
-                hodin: m.hodin_tydne as f32,
-                menu: Some(m.nazev.clone()),
-                zaku: obs.get(&v.id).copied(),
-            });
+            // hodiny volby po učitelích (NJ: 2 h UHR + 1 h KOŠ)
+            let mut po_ucitelich: Vec<(&str, f32)> = Vec::new();
+            for (k, delka) in solver::rozpis(m.hodin_tydne, m.dvojhodina).into_iter().enumerate() {
+                let u = v.ucitel_hodiny(k);
+                match po_ucitelich.iter_mut().find(|(x, _)| *x == u) {
+                    Some(x) => x.1 += delka as f32,
+                    None => po_ucitelich.push((u, delka as f32)),
+                }
+            }
+            for (u, hodin) in po_ucitelich {
+                out.push(Vyuka {
+                    ucitel: u.to_string(),
+                    predmet: v.predmet.clone(),
+                    tridy: m.tridy.clone(),
+                    skupina: v.nazev.clone(),
+                    hodin,
+                    menu: Some(m.nazev.clone()),
+                    zaku: obs.get(&v.id).copied(),
+                });
+            }
         }
     }
     out

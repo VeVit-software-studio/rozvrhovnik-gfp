@@ -18,6 +18,7 @@ pub mod bloky;
 pub mod data;
 pub mod demo;
 pub mod export;
+pub mod jidelna;
 pub mod profily;
 pub mod rok;
 pub mod skupiny_io;
